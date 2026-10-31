@@ -1,0 +1,70 @@
+rules_version = '2';
+
+// Accès réservé aux comptes ayant le rôle "gerant" dans users/{uid}.
+// Le rôle ne peut PAS être modifié depuis l'application : il se pose dans la console Firebase.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isGerant() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "gerant";
+    }
+
+    // Chacun peut lire son propre profil (pour connaître son rôle). Aucune écriture côté client.
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Salariés : contient le NIR (donnée sensible), gérant uniquement.
+    match /employees/{id} {
+      allow read, delete: if isGerant();
+      allow create, update: if isGerant()
+        && request.resource.data.nom is string
+        && request.resource.data.prenom is string
+        && request.resource.data.dpaeStatut in ["a_declarer", "declaree"];
+    }
+
+    match /suppliers/{id} {
+      allow read, delete: if isGerant();
+      allow create, update: if isGerant() && request.resource.data.nom is string;
+    }
+
+    match /invoices/{id} {
+      allow read, delete: if isGerant();
+      allow create, update: if isGerant()
+        && request.resource.data.montantTTC is int
+        && request.resource.data.statut in ["a_payer", "payee", "litige"]
+        && request.resource.data.mois is string;
+    }
+
+    match /cashEntries/{date} {
+      allow read, delete: if isGerant();
+      allow create, update: if isGerant()
+        && request.resource.data.date == date
+        && request.resource.data.cb is int
+        && request.resource.data.especes is int;
+    }
+
+    match /bankTransactions/{id} {
+      allow read, delete: if isGerant();
+      allow create, update: if isGerant()
+        && request.resource.data.montant is int
+        && request.resource.data.date is string;
+    }
+
+    match /settings/{id} {
+      allow read, write: if isGerant();
+    }
+
+    // Tout le reste est fermé.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
