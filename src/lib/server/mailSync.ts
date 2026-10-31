@@ -1,7 +1,22 @@
 import "server-only";
 import { FieldValue } from "firebase-admin/firestore";
 import { inboxDocId, type InboxDoc, type InboxFacture, type InboxItem, type InboxSource, type InboxUber } from "@/lib/ingest";
-import { bodyText, classify, displayNameOf, emailOf, gmailQuery, header, mergeRules, pdfAttachments, type GmailMessage, type MailRules } from "@/lib/mail";
+import {
+  bodyText,
+  classify,
+  displayNameOf,
+  emailOf,
+  etablissementOf,
+  gmailQuery,
+  header,
+  knownSupplier,
+  mergeRules,
+  parseFactureText,
+  parseUberRecap,
+  pdfAttachments,
+  type GmailMessage,
+  type MailRules,
+} from "@/lib/mail";
 import { adminDb } from "@/lib/server/admin";
 import { extractFacture, extractionEnabled, extractUber } from "@/lib/server/extract";
 import { getAttachment, getMessage, GoogleAuthError, listMessageIds, refreshAccessToken } from "@/lib/server/google";
@@ -19,6 +34,7 @@ export interface SyncResult {
   messagesVus: number;
   nouveaux: number; // éléments ajoutés dans « À vérifier »
   ignores: number;
+  doublons: number; // factures déjà reçues ou saisies (même fournisseur, même numéro)
   erreurs: number;
   incomplet: boolean; // vrai si le temps imparti a été atteint : la suite au prochain passage
   message?: string;
@@ -44,42 +60,94 @@ async function pdfData(token: string, msg: GmailMessage, ref: ReturnType<typeof 
   return getAttachment(token, msg.id, ref.attachmentId!);
 }
 
-async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "uber"): Promise<InboxItem[]> {
+/** Date du jour à Paris (le récap Uber arrive le lundi vers 1 h, soit le dimanche soir en UTC). */
+const parisDate = (iso: string) => new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Paris" });
+
+interface Ctx {
+  rules: MailRules;
+  supplierByEmail: Map<string, string>;
+}
+
+async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "uber", ctx: Ctx): Promise<InboxItem[]> {
   const from = header(msg, "From");
   const subject = header(msg, "Subject");
+  const body = bodyText(msg);
   const pdfs = pdfAttachments(msg).filter((p) => p.size <= MAX_PDF_BYTES).slice(0, MAX_PDF_PER_MAIL);
   const ai = extractionEnabled();
 
   if (kind === "uber") {
     const receivedAt = sourceOf(msg).receivedAt ?? "";
     const base: InboxUber = { kind: "uber", source: sourceOf(msg, pdfs[0]?.filename) };
-    if (!ai) return [{ ...base, ...(receivedAt ? { date: receivedAt.slice(0, 10) } : {}), incomplet: true }];
+    // Récap hebdo : tout est dans le corps, pas besoin d'IA.
+    const t = parseUberRecap(subject, body);
+    if (t.versementBancaire !== undefined) {
+      const item: InboxUber = {
+        ...base,
+        ...(receivedAt ? { date: parisDate(receivedAt) } : {}),
+        montant: t.versementBancaire,
+        ...(t.revenusTotaux !== undefined ? { brut: t.revenusTotaux } : {}),
+        ...(t.fraisUber !== undefined ? { frais: Math.abs(t.fraisUber) } : {}),
+        ...(t.periode ? { reference: `Semaine du ${t.periode}`.slice(0, 60) } : {}),
+      };
+      return [{ ...item, ...(item.date ? {} : { incomplet: true }) }];
+    }
+    if (!ai) return [{ ...base, ...(receivedAt ? { date: parisDate(receivedAt) } : {}), incomplet: true }];
     const pdf = pdfs[0] ? await pdfData(token, msg, pdfs[0]) : undefined;
-    const r = await extractUber(bodyText(msg), pdf, { from, subject, receivedAt });
+    const r = await extractUber(body, pdf, { from, subject, receivedAt });
     if (!r) return [];
     return [{ ...base, ...r, ...(r.date && r.montant !== undefined ? {} : { incomplet: true }) }];
   }
 
+  const email = emailOf(from);
+  const known = knownSupplier(email, ctx.rules.fournisseurs) ?? ctx.supplierByEmail.get(email);
+  const etablissement = etablissementOf(msg);
+  const text = parseFactureText(subject, body);
+  const finish = (it: InboxFacture): InboxFacture => {
+    const complete = it.fournisseur && it.dateFacture && it.montantTTC !== undefined;
+    return { ...it, fournisseur: it.fournisseur.slice(0, 120), ...(etablissement ? { etablissement } : {}), ...(complete ? {} : { incomplet: true }) };
+  };
+
+  // Fournisseur connu sans PDF (ex. Pennylane, e-facture) : le mail suffit.
+  if (pdfs.length === 0) {
+    return text.montantTTC !== undefined && known ? [finish({ kind: "facture", fournisseur: known, ...text, source: sourceOf(msg) })] : [];
+  }
+
   const items: InboxFacture[] = [];
   for (const p of pdfs) {
-    const base: InboxFacture = { kind: "facture", fournisseur: displayNameOf(from).slice(0, 120), source: sourceOf(msg, p.filename) };
+    // Ce que dit le mail ne vaut que s'il n'y a qu'une facture jointe.
+    const fromText = pdfs.length === 1 ? text : {};
+    const base: InboxFacture = { kind: "facture", fournisseur: known ?? displayNameOf(from), ...fromText, source: sourceOf(msg, p.filename) };
     if (!ai) {
-      items.push({ ...base, incomplet: true });
+      items.push(finish(base));
       continue;
     }
     const r = await extractFacture(await pdfData(token, msg, p), { from, subject, filename: p.filename });
     if (!r) continue; // PDF qui n'est pas une facture (CGV, bon de livraison…)
-    const complete = r.fournisseur && r.dateFacture && r.montantTTC !== undefined;
-    items.push({ ...base, ...r, fournisseur: (r.fournisseur || base.fournisseur).slice(0, 120), ...(complete ? {} : { incomplet: true }) });
+    // Les valeurs écrites dans le mail priment (format fixe), le nom du fournisseur connu aussi (pour les doublons).
+    items.push(finish({ ...base, ...r, ...fromText, fournisseur: known ?? r.fournisseur ?? base.fournisseur }));
   }
   return items;
+}
+
+/** Même fournisseur et même numéro déjà reçu (DUPLICATA, double envoi) ou déjà saisi dans Factures. */
+async function isDuplicate(db: FirebaseFirestore.Firestore, item: InboxItem): Promise<boolean> {
+  if (item.kind !== "facture" || !item.numero) return false;
+  const nom = item.fournisseur.toLowerCase();
+  const [inbox, invoices] = await Promise.all([
+    db.collection("inbox").where("item.numero", "==", item.numero).get(),
+    db.collection("invoices").where("numero", "==", item.numero).get(),
+  ]);
+  return (
+    inbox.docs.some((d) => String(d.get("item.fournisseur") ?? "").toLowerCase() === nom && d.get("statut") !== "rejete") ||
+    invoices.docs.some((d) => String(d.get("supplierNom") ?? "").toLowerCase() === nom)
+  );
 }
 
 export async function syncMail({ budgetMs = 240_000 }: { budgetMs?: number } = {}): Promise<SyncResult> {
   const started = Date.now();
   const db = adminDb();
   const statusRef = db.doc("settings/mail");
-  const result: SyncResult = { status: "ok", messagesVus: 0, nouveaux: 0, ignores: 0, erreurs: 0, incomplet: false };
+  const result: SyncResult = { status: "ok", messagesVus: 0, nouveaux: 0, ignores: 0, doublons: 0, erreurs: 0, incomplet: false };
 
   const priv = await db.doc("private/gmail").get();
   const refreshToken = priv.get("refreshToken") as string | undefined;
@@ -94,7 +162,12 @@ export async function syncMail({ budgetMs = 240_000 }: { budgetMs?: number } = {
   try {
     const token = await refreshAccessToken(refreshToken);
     const suppliers = await db.collection("suppliers").get();
-    const supplierEmails = suppliers.docs.map((d) => String(d.get("email") ?? "").trim().toLowerCase()).filter((e) => e.includes("@"));
+    const supplierByEmail = new Map(
+      suppliers.docs
+        .map((d) => [String(d.get("email") ?? "").trim().toLowerCase(), String(d.get("nom") ?? "")] as const)
+        .filter(([e, n]) => e.includes("@") && n),
+    );
+    const supplierEmails = [...supplierByEmail.keys()];
 
     const ids = (await listMessageIds(token, gmailQuery(days, rules))).reverse(); // du plus ancien au plus récent
     const logs = await Promise.all(ids.map((id) => db.doc(`mailLog/${id}`).get()));
@@ -109,9 +182,13 @@ export async function syncMail({ budgetMs = 240_000 }: { budgetMs?: number } = {
       try {
         const msg = await getMessage(token, id);
         const kind = classify(msg, rules, supplierEmails);
-        const items = kind ? await itemsFor(token, msg, kind) : [];
+        const items = kind ? await itemsFor(token, msg, kind, { rules, supplierByEmail }) : [];
         const now = Date.now();
         for (const [n, item] of items.entries()) {
+          if (await isDuplicate(db, item)) {
+            result.doublons++;
+            continue;
+          }
           const doc: InboxDoc = { item, statut: "a_verifier", receivedAt: now };
           try {
             await db.collection("inbox").doc(inboxDocId(id, n)).create(doc);

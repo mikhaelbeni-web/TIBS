@@ -60,6 +60,8 @@ export interface Invoice {
   statut: StatutFacture;
   datePaiement?: string;
   note?: string;
+  /** Restaurant concerné : 19e (SAS AVA, rue Manin) ou 17e (rue de Prony). */
+  etablissement?: "19e" | "17e";
   createdAt: number;
 }
 
