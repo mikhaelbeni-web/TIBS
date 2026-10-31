@@ -49,6 +49,23 @@ Montants stockés en **centimes** (entiers).
 - Caisse : `Date ; CB ; Espèces ; Tickets resto ; Autres ; TTC 5,5 ; TTC 10 ; TTC 20`. Plusieurs lignes d'un même jour sont additionnées. Format provisoire en attendant un export réel de L'Addition.
 - Relevé bancaire : `Date ; Libellé ; Montant` ou `Date ; Libellé ; Débit ; Crédit`, CSV (UTF-8 ou Windows-1252) ou `.xlsx`.
 
+## Boîte mail du restaurant (relevé automatique)
+
+L'app lit chaque matin (Vercel Cron, 5 h UTC) la boîte Gmail connectée, en lecture seule :
+- mails avec un PDF venant d'un fournisseur connu, ou dont l'objet / le PDF parle de facture ;
+- mails Uber Eats annonçant un paiement.
+
+Chaque élément trouvé arrive dans **À vérifier** : on contrôle, on corrige si besoin, on valide (il passe dans Factures ou Caisse > Uber). Rien n'est enregistré sans validation. Un mail n'est lu qu'une fois (collection `mailLog`).
+
+Mise en place (une seule fois) :
+1. Console Google Cloud, projet `tiibs-2ac00` : activer **Gmail API**.
+2. Écran de consentement OAuth : type Externe, ajouter le scope `gmail.readonly`, puis **Publier l'application** (en mode Test, Google coupe l'accès au bout de 7 jours). Google affichera « application non validée » : Paramètres avancés > Continuer.
+3. Identifiants > Créer un ID client OAuth > Application Web, URI de redirection : `https://<domaine>/api/gmail/callback`.
+4. Vercel > Settings > Environment Variables : `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CRON_SECRET`, `FIREBASE_SERVICE_ACCOUNT` (et `ANTHROPIC_API_KEY` pour lire les PDF), puis redéployer.
+5. Dans l'app : À vérifier > **Connecter Gmail**, choisir la boîte du restaurant.
+
+Les règles de tri (expéditeurs Uber, mots-clés, expéditeurs à ignorer) se règlent dans le document Firestore `settings/mail`, champ `regles`.
+
 ## Développement local sans toucher la vraie base
 
 ```bash

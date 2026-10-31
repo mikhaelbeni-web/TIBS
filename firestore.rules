@@ -65,8 +65,19 @@ service cloud.firestore {
         && request.resource.data.date is string;
     }
 
+    // Boîte de réception alimentée par le serveur (compte de service) : le gérant lit, valide ou rejette.
+    match /inbox/{id} {
+      allow read: if isGerant();
+      allow create, delete: if false;
+      allow update: if isGerant()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["statut", "traiteLe"])
+        && request.resource.data.statut in ["valide", "rejete"];
+    }
+
+    // settings/mail est tenu par le serveur (état de la boîte mail) : lecture seule pour le gérant.
     match /settings/{id} {
-      allow read, write: if isGerant();
+      allow read: if isGerant();
+      allow write: if isGerant() && id != "mail";
     }
 
     // Tout le reste est fermé.

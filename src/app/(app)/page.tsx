@@ -9,6 +9,7 @@ import { prochaineEcheanceTva } from "@/lib/tva";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type { AppSettings } from "@/lib/types";
+import type { InboxDoc } from "@/lib/ingest";
 import type { CashEntry, Employee, Invoice } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 
@@ -16,6 +17,8 @@ export default function Dashboard() {
   const employees = useCollection<Employee>("employees", "dateEmbauche", true);
   const invoices = useCollection<Invoice>("invoices", "dateFacture", true);
   const cash = useCollection<CashEntry>("cashEntries", "date", true);
+  const inbox = useCollection<InboxDoc>("inbox", "receivedAt", true);
+  const aVerifier = inbox.items.filter((i) => i.statut === "a_verifier").length;
   const today = new Date().toISOString().slice(0, 10);
   const mois = today.slice(0, 7);
   const [settings, setSettings] = useState<AppSettings>({});
@@ -35,6 +38,13 @@ export default function Dashboard() {
   const monthCash = cash.items.filter((c) => c.date.startsWith(mois));
 
   const tiles = [
+    {
+      href: "/a-verifier",
+      title: "Reçu par mail",
+      value: String(aVerifier),
+      sub: aVerifier ? "à vérifier" : "Rien en attente",
+      alert: aVerifier > 0,
+    },
     {
       href: "/salaries",
       title: "DPAE à faire",
@@ -62,7 +72,7 @@ export default function Dashboard() {
   return (
     <div>
       <PageHeader title="Tableau de bord" />
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {tiles.map((t) => (
           <Link key={t.href} href={t.href}>
             <Card className="h-full hover:border-ink">
