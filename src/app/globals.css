@@ -1,0 +1,48 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-bg: var(--tibs-bg);
+  --color-surface: var(--tibs-surface);
+  --color-surface-2: var(--tibs-surface-2);
+  --color-border: var(--tibs-border);
+  --color-ink: var(--tibs-ink);
+  --color-ink-muted: var(--tibs-ink-muted);
+  --color-muted: var(--tibs-ink-muted);   /* alias : text-muted */
+  --color-ink-inverse: var(--tibs-ink-inverse);
+  --color-brand: var(--tibs-brand);
+  --color-brand-soft: var(--tibs-brand-soft);
+  --color-bar: var(--tibs-bar);
+  --color-primary: var(--tibs-primary);
+  --color-primary-fg: var(--tibs-primary-fg);
+  --color-success: var(--tibs-success);   --color-success-soft: var(--tibs-success-soft);
+  --color-warning: var(--tibs-warning);   --color-warning-soft: var(--tibs-warning-soft);
+  --color-danger: var(--tibs-danger);     --color-danger-soft: var(--tibs-danger-soft);
+  --color-info: var(--tibs-info);         --color-info-soft: var(--tibs-info-soft);
+
+  --font-display: var(--tibs-font-display);
+  --font-sans: var(--tibs-font-sans);
+
+  --text-kpi: 2.125rem;    --text-kpi--line-height: 2.375rem;
+  --text-title: 1.625rem;  --text-title--line-height: 2rem;
+  --text-section: 1.125rem;--text-section--line-height: 1.5rem;
+  --text-label: 0.875rem;  --text-label--line-height: 1.25rem;
+  --text-caption: 0.75rem; --text-caption--line-height: 1rem;
+
+  --radius-card: 12px;
+  --radius-control: 10px;
+  --shadow-sheet: var(--tibs-shadow-sheet);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--tibs-bg);
+  color: var(--tibs-ink);
+  font-family: var(--tibs-font-sans);
+  -webkit-font-smoothing: antialiased;
+}
