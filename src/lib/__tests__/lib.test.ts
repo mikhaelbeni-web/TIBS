@@ -241,3 +241,34 @@ describe("Uber Eats", () => {
     expect(r.unmatchedBank.map((b) => b.id)).toEqual(["b2"]);
   });
 });
+
+import { inboxDocId, parseInboxItem, safeEqual } from "../ingest";
+
+describe("ingestion des mails", () => {
+  const source = { messageId: "<abc@mail>", from: "factures@metro.fr", subject: "Votre facture" };
+  it("accepte une facture en euros et convertit en centimes", () => {
+    expect(parseInboxItem({ kind: "facture", fournisseur: "Metro", numero: "F1", dateFacture: "28/10/2026", montantHT: "100,00", montantTVA: 20, montantTTC: "120,00", source })).toEqual({
+      kind: "facture",
+      fournisseur: "Metro",
+      numero: "F1",
+      dateFacture: "2026-10-28",
+      montantHT: 10000,
+      montantTVA: 2000,
+      montantTTC: 12000,
+      source,
+    });
+  });
+  it("refuse les éléments incomplets", () => {
+    expect(parseInboxItem({ kind: "facture", fournisseur: "Metro", dateFacture: "2026-10-28", source })).toBe("montantTTC invalide");
+    expect(parseInboxItem({ kind: "uber", date: "2026-10-15", montant: "10", source: {} })).toBe("source.messageId manquant");
+    expect(parseInboxItem({ kind: "autre", source })).toMatch(/kind/);
+  });
+  it("lit un versement Uber", () => {
+    expect(parseInboxItem({ kind: "uber", date: "2026-10-15", montant: "1 234,50", frais: "-300", source })).toMatchObject({ montant: 123450, frais: 30000 });
+  });
+  it("produit des ids sûrs et compare les jetons", () => {
+    expect(inboxDocId("<abc/def@mail>", 1)).toBe("_abc_def_mail__1");
+    expect(safeEqual("abc", "abc")).toBe(true);
+    expect(safeEqual("abc", "abd")).toBe(false);
+  });
+});
