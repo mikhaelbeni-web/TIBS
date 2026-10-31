@@ -47,7 +47,7 @@ export default function LoginPage() {
     <div className="flex min-h-dvh items-center justify-center bg-bar p-4">
       <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4 rounded-[20px] bg-surface p-6">
         <div>
-          <div className="font-display text-4xl tracking-wide">TIBS<span className="text-brand">.</span></div>
+          <div className="font-display text-4xl tracking-wide">TIBS<span className="ml-1 inline-block size-2 rounded-full bg-brand" aria-hidden /></div>
           <p className="text-sm text-muted">Espace de gestion</p>
         </div>
         <Field label="E-mail">

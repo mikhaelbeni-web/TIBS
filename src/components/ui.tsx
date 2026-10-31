@@ -57,12 +57,13 @@ export function PageHeader({ title, action }: { title: string; action?: ReactNod
   );
 }
 
-export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "green" | "orange" | "red" }) {
+export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "green" | "orange" | "red" | "info" }) {
   const t = {
     neutral: "bg-surface-2 text-ink",
     green: "bg-success-soft text-success",
     orange: "bg-warning-soft text-warning",
     red: "bg-danger-soft text-danger",
+    info: "bg-info-soft text-info",
   }[tone];
   return <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-caption font-semibold ${t}`}>{children}</span>;
 }
