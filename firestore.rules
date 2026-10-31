@@ -58,6 +58,13 @@ service cloud.firestore {
         && request.resource.data.date is string;
     }
 
+    match /uberPayouts/{id} {
+      allow read, delete: if isGerant();
+      allow create, update: if isGerant()
+        && request.resource.data.montant is int
+        && request.resource.data.date is string;
+    }
+
     match /settings/{id} {
       allow read, write: if isGerant();
     }

@@ -25,8 +25,8 @@ export function Button({
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
-    <label className="flex flex-col gap-1 text-sm">
-      <span className="font-medium text-muted">{label}</span>
+    <label className="flex min-w-0 flex-col gap-1 text-sm">
+      <span className="truncate font-medium text-muted">{label}</span>
       {children}
       {hint && <span className="text-xs text-muted">{hint}</span>}
     </label>
@@ -34,7 +34,7 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 }
 
 const inputCls =
-  "min-h-12 w-full rounded-control border border-border bg-surface px-3 text-base outline-none focus:border-ink focus:ring-2 focus:ring-primary/60";
+  "min-h-12 w-full min-w-0 appearance-none rounded-control border border-border bg-surface px-3 text-base outline-none focus:border-ink focus:ring-2 focus:ring-primary/60";
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${inputCls} ${props.className ?? ""}`} />;

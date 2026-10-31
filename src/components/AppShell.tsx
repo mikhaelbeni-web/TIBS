@@ -60,7 +60,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="min-h-dvh bg-bg md:flex">
       {/* Barre latérale (tablette / ordinateur) */}
       <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r border-border bg-surface p-4 md:flex">
-        <div className="mb-6 font-display text-3xl tracking-wide">TIBS<span className="ml-1 inline-block size-2 rounded-full bg-brand" aria-hidden /></div>
+        <div className="mb-6 font-display text-3xl tracking-wide">Le Tib&rsquo;s<span className="ml-1 inline-block size-2 rounded-full bg-brand" aria-hidden /></div>
         <nav className="flex flex-1 flex-col gap-1">
           {NAV.map((n) => (
             <Link
@@ -79,7 +79,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       {/* En-tête (téléphone) */}
       <header className="sticky top-0 z-30 flex items-center justify-between border-b border-border bg-surface px-4 pt-[env(safe-area-inset-top)] md:hidden">
-        <div className="py-3 font-display text-2xl tracking-wide">TIBS<span className="ml-1 inline-block size-2 rounded-full bg-brand" aria-hidden /></div>
+        <div className="py-3 font-display text-2xl tracking-wide">Le Tib&rsquo;s<span className="ml-1 inline-block size-2 rounded-full bg-brand" aria-hidden /></div>
         <Button variant="ghost" onClick={logout}>Déconnexion</Button>
       </header>
 

@@ -7,8 +7,8 @@ const anton = Anton({ subsets: ["latin"], weight: "400", variable: "--font-anton
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "TIBS – Gestion",
-  description: "Gestion interne du restaurant TIBS : salariés, factures fournisseurs, caisse.",
+  title: "Le Tib's – Gestion",
+  description: "Gestion interne du restaurant Le Tib's : salariés, factures fournisseurs, caisse.",
   robots: { index: false, follow: false },
 };
 
