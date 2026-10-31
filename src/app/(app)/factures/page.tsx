@@ -68,7 +68,7 @@ export default function FacturesPage() {
         title="Factures fournisseurs"
         action={
           <>
-            <Link href="/fournisseurs" className="inline-flex min-h-11 items-center rounded-lg border border-neutral-300 bg-white px-4 text-sm font-medium md:hidden">
+            <Link href="/fournisseurs" className="inline-flex min-h-12 items-center rounded-control border border-border bg-surface px-4 text-sm font-medium md:hidden">
               Fournisseurs
             </Link>
             <Button variant="secondary" onClick={exportCsv} disabled={!month.length}>Export comptable</Button>
@@ -77,17 +77,17 @@ export default function FacturesPage() {
         }
       />
       {!suppliers.loading && !suppliers.items.length && (
-        <p className="mb-4 text-sm text-neutral-600">
+        <p className="mb-4 text-sm text-muted">
           Commencez par <Link className="underline" href="/fournisseurs">ajouter un fournisseur</Link>.
         </p>
       )}
       <Field label="Mois"><Input type="month" value={mois} onChange={(e) => setMois(e.target.value || thisMonth())} className="sm:w-56" /></Field>
 
       <div className="my-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card><div className="text-xs text-neutral-500">Total HT</div><div className="text-lg font-semibold">{formatEuros(totals.ht)}</div></Card>
-        <Card><div className="text-xs text-neutral-500">TVA</div><div className="text-lg font-semibold">{formatEuros(totals.tva)}</div></Card>
-        <Card><div className="text-xs text-neutral-500">Total TTC</div><div className="text-lg font-semibold">{formatEuros(totals.ttc)}</div></Card>
-        <Card><div className="text-xs text-neutral-500">Reste à payer</div><div className="text-lg font-semibold text-orange-700">{formatEuros(totals.due)}</div></Card>
+        <Card><div className="text-xs text-muted">Total HT</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totals.ht)}</div></Card>
+        <Card><div className="text-xs text-muted">TVA</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totals.tva)}</div></Card>
+        <Card><div className="text-xs text-muted">Total TTC</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totals.ttc)}</div></Card>
+        <Card><div className="text-xs text-muted">Reste à payer</div><div className="text-lg font-semibold text-warning">{formatEuros(totals.due)}</div></Card>
       </div>
 
       {bySupplier.length > 1 && (
@@ -103,7 +103,7 @@ export default function FacturesPage() {
 
       <ErrorBox message={error} />
       {loading ? (
-        <p className="text-neutral-500">Chargement…</p>
+        <p className="text-muted">Chargement…</p>
       ) : month.length === 0 ? (
         <Empty>Aucune facture pour ce mois.</Empty>
       ) : (
@@ -116,7 +116,7 @@ export default function FacturesPage() {
                     <span className="truncate font-semibold">{i.supplierNom}</span>
                     <Badge tone={STATUT[i.statut].tone}>{STATUT[i.statut].label}</Badge>
                   </div>
-                  <div className="text-sm text-neutral-600">
+                  <div className="text-sm text-muted">
                     N° {i.numero} · {fr(i.dateFacture)}{i.dateEcheance ? ` · échéance ${fr(i.dateEcheance)}` : ""}
                   </div>
                 </button>

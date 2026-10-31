@@ -1,0 +1,87 @@
+/* =========================================================
+   TIBS — Design tokens (v1)
+   Direction v2 : calée sur letibs.dishop.co (ambre du bouton #F5A623,
+   anthracite du bandeau #3F3F3F, titre condensé Anton). À ajuster sur Instagram.
+   Usage : importer dans app/globals.css AVANT @import "tailwindcss".
+   Thème sombre : classe .dark sur <html> (ou prefers-color-scheme).
+   ========================================================= */
+
+:root {
+  /* Neutres */
+  --tibs-bg:            #F7F6F3;  /* fond gris chaud */
+  --tibs-surface:       #FFFFFF;
+  --tibs-surface-2:     #EFEDE8;  /* zones secondaires, en-têtes de tableau */
+  --tibs-border:        #E3E0DA;
+  --tibs-ink:           #1C1C1C;  /* texte principal */
+  --tibs-ink-muted:     #66625C;  /* texte secondaire, ~5.6:1 */
+  --tibs-ink-inverse:   #FFFFFF;
+
+  /* Marque : ambre du site. En FOND uniquement (texte encre dessus), jamais en texte sur blanc (contraste 2:1). Jamais un statut. */
+  --tibs-brand:         #F5A623;
+  --tibs-brand-soft:    #FEF1D9;
+  --tibs-bar:           #3F3F3F;  /* anthracite du bandeau : barre d'onglets, tuile CA */
+
+  /* Action principale : bouton ambre, texte encre (10:1) */
+  --tibs-primary:       #F5A623;
+  --tibs-primary-fg:    #1C1C1C;
+
+  /* Sémantique (texte/icône) + fond teinté ~10 % */
+  --tibs-success:       #1F7A45;  --tibs-success-soft: #E6F2EA;
+  --tibs-warning:       #B54708;  --tibs-warning-soft: #FDEBDC;
+  --tibs-danger:        #B42318;  --tibs-danger-soft:  #FBE8E6;
+  --tibs-info:          #1F5FAD;  --tibs-info-soft:    #E5EEF8;
+
+  /* Typo */
+  --tibs-font-display:  var(--font-anton), "Anton", Impact, sans-serif;
+  --tibs-font-sans:     var(--font-inter), "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Échelle mobile (taille / interligne) */
+  --tibs-text-kpi:      2.125rem; --tibs-lh-kpi: 2.375rem;    /* 34/38 Anton */
+  --tibs-text-title:    1.625rem; --tibs-lh-title: 2rem;      /* 26/32 Anton */
+  --tibs-text-section:  1.125rem; --tibs-lh-section: 1.5rem;  /* 18/24 Inter 600 */
+  --tibs-text-body:     1rem;     --tibs-lh-body: 1.5rem;     /* 16/24 */
+  --tibs-text-label:    0.875rem; --tibs-lh-label: 1.25rem;   /* 14/20 Inter 500 */
+  --tibs-text-caption:  0.75rem;  --tibs-lh-caption: 1rem;    /* 12/16, minimum absolu */
+
+  /* Formes */
+  --tibs-radius-card:   12px;
+  --tibs-radius-control:10px;
+  --tibs-radius-pill:   999px;
+  --tibs-shadow-sheet:  0 8px 24px rgba(28,28,28,.14);  /* seule ombre : bottom sheets */
+
+  /* Espacement / ergonomie */
+  --tibs-space:         8px;      /* grille de base */
+  --tibs-gutter:        16px;     /* marge écran mobile */
+  --tibs-touch:         48px;     /* cible tactile minimum */
+  --tibs-row:           56px;     /* ligne de liste */
+  --tibs-tabbar:        64px;
+
+  /* Mouvement */
+  --tibs-ease:          cubic-bezier(.2,.8,.2,1);
+  --tibs-dur:           180ms;
+}
+
+.dark {
+  --tibs-bg:            #121212;
+  --tibs-surface:       #1E1E1E;
+  --tibs-surface-2:     #262626;
+  --tibs-border:        #303030;
+  --tibs-ink:           #F5F5F4;
+  --tibs-ink-muted:     #A3A09B;
+  --tibs-ink-inverse:   #1C1C1C;
+  --tibs-brand:         #F5A623;
+  --tibs-brand-soft:    #3A2A0E;
+  --tibs-bar:           #2A2A2A;
+  --tibs-primary:       #F5A623;
+  --tibs-primary-fg:    #1C1C1C;
+  --tibs-success:       #3FB872;  --tibs-success-soft: #14291D;
+  --tibs-warning:       #F38744;  --tibs-warning-soft: #3A1F0E;
+  --tibs-danger:        #F2665A;  --tibs-danger-soft:  #351815;
+  --tibs-info:          #6AA2EE;  --tibs-info-soft:    #15223A;
+  --tibs-shadow-sheet:  0 8px 24px rgba(0,0,0,.5);
+}
+
+/* Montants : toujours chiffres tabulaires, alignés à droite */
+.tibs-amount { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; text-align: right; white-space: nowrap; }
+/* Champs : 16px mini pour éviter le zoom iOS */
+input, select, textarea { font-size: max(16px, 1rem); }

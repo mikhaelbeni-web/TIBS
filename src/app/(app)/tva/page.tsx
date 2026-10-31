@@ -146,12 +146,12 @@ export default function TvaPage() {
           </Field>
         )}
       </div>
-      <p className="mb-4 text-sm text-neutral-600">Période {label}</p>
+      <p className="mb-4 text-sm text-muted">Période {label}</p>
 
       <ErrorBox message={cash.error || invoices.error || error} />
 
       {r.nonVentile.jours.length > 0 && (
-        <p className="mb-4 rounded-lg bg-orange-50 p-3 text-sm text-orange-800">
+        <p className="mb-4 rounded-control bg-warning-soft p-3 text-sm text-warning">
           {r.nonVentile.jours.length} journée(s) de caisse ({formatEuros(r.nonVentile.montant)}) n&apos;ont pas de ventilation par taux et ne
           sont pas comptées dans la TVA collectée : {r.nonVentile.jours.map(fr).join(", ")}. Complétez-les dans Caisse.
         </p>
@@ -160,7 +160,7 @@ export default function TvaPage() {
       <div className="grid gap-3 lg:grid-cols-2">
         <Card>
           <div className="mb-2 font-medium">TVA collectée sur les ventes</div>
-          <ul className="divide-y divide-neutral-100 text-sm">
+          <ul className="divide-y divide-border text-sm">
             {r.collectee.map((l) => (
               <li key={l.label} className="flex justify-between gap-2 py-2">
                 <span>{l.label} · {formatEuros(l.ttc)} TTC</span>
@@ -174,15 +174,15 @@ export default function TvaPage() {
         </Card>
         <Card>
           <div className="mb-2 font-medium">TVA déductible sur les factures</div>
-          <div className="text-sm text-neutral-600">{r.nbFactures} facture(s), {formatEuros(r.facturesHT)} HT</div>
+          <div className="text-sm text-muted">{r.nbFactures} facture(s), {formatEuros(r.facturesHT)} HT</div>
           <div className="mt-2 text-2xl font-semibold tabular-nums">{formatEuros(r.deductible)}</div>
-          <p className="mt-2 text-xs text-neutral-500">
+          <p className="mt-2 text-xs text-muted">
             Selon la date de facture. Pour les prestations de services, la TVA est déductible au paiement : votre comptable ajustera si besoin.
           </p>
         </Card>
         <Card className="lg:col-span-2">
-          <div className="text-sm text-neutral-500">{r.net >= 0 ? "TVA nette à payer" : "Crédit de TVA"}</div>
-          <div className={`text-3xl font-semibold tabular-nums ${r.net >= 0 ? "" : "text-green-700"}`}>{formatEuros(Math.abs(r.net))}</div>
+          <div className="text-sm text-muted">{r.net >= 0 ? "TVA nette à payer" : "Crédit de TVA"}</div>
+          <div className={`font-display text-kpi tabular-nums ${r.net >= 0 ? "" : "text-success"}`}>{formatEuros(Math.abs(r.net))}</div>
         </Card>
       </div>
 
@@ -195,7 +195,7 @@ export default function TvaPage() {
           </Field>
         </div>
         <Button variant="secondary" onClick={saveSettings}>{saved ? "Enregistré ✓" : "Enregistrer"}</Button>
-        <p className="text-xs text-neutral-500">« Envoyer au comptable » ouvre votre messagerie avec le récapitulatif ; joignez-y le CSV exporté.</p>
+        <p className="text-xs text-muted">« Envoyer au comptable » ouvre votre messagerie avec le récapitulatif ; joignez-y le CSV exporté.</p>
       </Card>
     </div>
   );

@@ -83,7 +83,7 @@ export default function SalariesPage() {
   return (
     <div>
       <PageHeader
-        title="Salariés et DPAE"
+        title="Équipe et DPAE"
         action={
           <>
             <Button variant="secondary" onClick={() => fileRef.current?.click()}>Importer Excel</Button>
@@ -93,7 +93,7 @@ export default function SalariesPage() {
       />
       <input ref={fileRef} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
 
-      <p className="mb-4 text-sm text-neutral-600">
+      <p className="mb-4 text-sm text-muted">
         La DPAE se fait à chaque embauche, au plus tard juste avant la prise de poste, sur{" "}
         <a className="underline" href="https://www.net-entreprises.fr" target="_blank" rel="noreferrer">net-entreprises.fr</a>.{" "}
         <a className="underline" href="/modele-salaries.csv" download>Télécharger le modèle Excel/CSV</a>.
@@ -106,7 +106,7 @@ export default function SalariesPage() {
 
       <ErrorBox message={error || opError} />
       {loading ? (
-        <p className="text-neutral-500">Chargement…</p>
+        <p className="text-muted">Chargement…</p>
       ) : shown.length === 0 ? (
         <Empty>{filter === "todo" ? "Aucune DPAE en attente." : "Aucun salarié. Ajoutez-en un ou importez un fichier."}</Empty>
       ) : (
@@ -119,7 +119,7 @@ export default function SalariesPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="truncate font-semibold">{e.prenom} {e.nom}</div>
-                      <div className="text-sm text-neutral-600">
+                      <div className="text-sm text-muted">
                         {e.poste || "Poste ?"} · {e.typeContrat} · embauche le {fr(e.dateEmbauche)} à {e.heureEmbauche}
                       </div>
                     </div>
@@ -132,14 +132,14 @@ export default function SalariesPage() {
                     )}
                   </div>
                   {e.dpaeStatut === "declaree" ? (
-                    <p className="text-sm text-neutral-600">
+                    <p className="text-sm text-muted">
                       Déclarée le {fr(e.dpaeDateDeclaration)}{e.dpaeNumeroAccuse ? ` · accusé n° ${e.dpaeNumeroAccuse}` : ""}
                     </p>
                   ) : (
                     (check.errors.length > 0 || check.warnings.length > 0) && (
                       <ul className="space-y-1 text-sm">
-                        {check.errors.map((m) => <li key={m} className="text-red-700">• {m}</li>)}
-                        {check.warnings.map((m) => <li key={m} className="text-orange-700">• {m}</li>)}
+                        {check.errors.map((m) => <li key={m} className="text-danger">• {m}</li>)}
+                        {check.warnings.map((m) => <li key={m} className="text-warning">• {m}</li>)}
                       </ul>
                     )
                   )}
@@ -168,14 +168,14 @@ export default function SalariesPage() {
           {importRows?.map((r, i) => {
             const c = checkDpae({ ...r, dpaeStatut: "a_declarer" });
             return (
-              <li key={i} className="flex items-center justify-between gap-2 rounded-lg border border-neutral-200 p-2 text-sm">
+              <li key={i} className="flex items-center justify-between gap-2 rounded-control border border-border p-2 text-sm">
                 <span className="truncate">{r.prenom} {r.nom} · {fr(r.dateEmbauche) || "date ?"}</span>
                 {c.ok ? <Badge tone="green">OK</Badge> : <Badge tone="red">{c.errors.length} erreur(s)</Badge>}
               </li>
             );
           })}
         </ul>
-        <p className="mb-3 text-sm text-neutral-600">Les lignes incomplètes sont importées quand même ; vous les compléterez ensuite.</p>
+        <p className="mb-3 text-sm text-muted">Les lignes incomplètes sont importées quand même ; vous les compléterez ensuite.</p>
         <Button className="w-full" onClick={confirmImport}>Importer</Button>
       </Sheet>
 
@@ -205,7 +205,7 @@ function DeclareForm({ employee, onDone }: { employee: WithId<Employee>; onDone:
   }
   return (
     <form onSubmit={submit} className="space-y-3">
-      <p className="text-sm text-neutral-600">{employee.prenom} {employee.nom}</p>
+      <p className="text-sm text-muted">{employee.prenom} {employee.nom}</p>
       <Field label="Date de la déclaration"><Input type="date" required value={date} onChange={(e) => setDate(e.target.value)} /></Field>
       <Field label="N° d'accusé de réception" hint="Indiqué sur l'accusé reçu après l'envoi.">
         <Input value={numero} onChange={(e) => setNumero(e.target.value)} />
@@ -287,7 +287,7 @@ function EmployeeForm({ initial, onDone }: { initial: WithId<Employee> | null; o
         )}
       </div>
       {!check.ok && (
-        <ul className="rounded-lg bg-orange-50 p-3 text-sm text-orange-800">
+        <ul className="rounded-control bg-warning-soft p-3 text-sm text-warning">
           {check.errors.map((m) => <li key={m}>• {m}</li>)}
         </ul>
       )}

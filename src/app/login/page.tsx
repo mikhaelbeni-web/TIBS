@@ -44,11 +44,11 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-black p-4">
-      <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6">
+    <div className="flex min-h-dvh items-center justify-center bg-bar p-4">
+      <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4 rounded-[20px] bg-surface p-6">
         <div>
-          <div className="text-3xl font-black tracking-tight">TIBS</div>
-          <p className="text-sm text-neutral-500">Espace de gestion</p>
+          <div className="font-display text-4xl tracking-wide">TIBS<span className="text-brand">.</span></div>
+          <p className="text-sm text-muted">Espace de gestion</p>
         </div>
         <Field label="E-mail">
           <Input type="email" autoComplete="email" inputMode="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -57,9 +57,9 @@ export default function LoginPage() {
           <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
         <ErrorBox message={error || authError} />
-        {info && <p className="text-sm text-green-700">{info}</p>}
+        {info && <p className="text-sm text-success">{info}</p>}
         <Button type="submit" className="w-full" disabled={busy}>{busy ? "Connexion…" : "Se connecter"}</Button>
-        <button type="button" onClick={onReset} className="min-h-11 w-full text-sm text-neutral-600 underline">
+        <button type="button" onClick={onReset} className="min-h-11 w-full text-sm text-muted underline">
           Mot de passe oublié
         </button>
       </form>

@@ -1,9 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Geist } from "next/font/google";
+import { Anton, Inter } from "next/font/google";
 import { AuthProvider } from "@/components/AuthProvider";
 import "./globals.css";
 
-const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
+const anton = Anton({ subsets: ["latin"], weight: "400", variable: "--font-anton" });
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
   title: "TIBS – Gestion",
@@ -15,12 +16,12 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#000000",
+  themeColor: "#3F3F3F",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="fr" className={`${geistSans.variable} h-full antialiased`}>
+    <html lang="fr" className={`${anton.variable} ${inter.variable} h-full antialiased`}>
       <body className="min-h-full">
         <AuthProvider>{children}</AuthProvider>
       </body>

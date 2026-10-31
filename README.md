@@ -25,7 +25,7 @@ npm run dev
 2. **Firestore Database** : créer la base (région `eur3` ou `europe-west`).
 3. Firestore > Données : créer la collection `users`, document dont l'ID est votre UID, avec les champs `email` (texte) et `role` = `gerant` (texte).
 4. Publier les règles de sécurité : copier `firestore.rules` dans Firestore > Règles, ou `npx firebase-tools deploy --only firestore:rules`.
-5. Authentication > Paramètres > Domaines autorisés : ajouter le domaine de déploiement (ex. `tibs.vercel.app`).
+5. Authentication > Paramètres > Domaines autorisés : ajouter le domaine exact de déploiement (ex. `tibs.vercel.app`), et chaque domaine d'aperçu utilisé. Les jokers (`*.vercel.app`) ne sont pas acceptés.
 
 Seuls les comptes avec `role: "gerant"` accèdent aux données. Le rôle ne peut pas être modifié depuis l'application.
 

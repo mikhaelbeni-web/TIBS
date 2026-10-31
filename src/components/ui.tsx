@@ -10,14 +10,14 @@ export function Button({
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" | "ghost" }) {
   const styles = {
-    primary: "bg-black text-white hover:bg-neutral-800 disabled:bg-neutral-400",
-    secondary: "bg-white text-black border border-neutral-300 hover:bg-neutral-50",
-    danger: "bg-red-600 text-white hover:bg-red-700",
-    ghost: "text-neutral-700 hover:bg-neutral-100",
+    primary: "bg-primary text-primary-fg font-semibold hover:brightness-95 disabled:opacity-50",
+    secondary: "bg-surface text-ink border border-border hover:bg-surface-2",
+    danger: "bg-surface text-danger border border-danger/40 hover:bg-danger-soft",
+    ghost: "text-muted hover:bg-surface-2",
   }[variant];
   return (
     <button
-      className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition disabled:cursor-not-allowed ${styles} ${className}`}
+      className={`inline-flex min-h-12 items-center justify-center gap-2 rounded-control px-4 text-sm font-medium transition disabled:cursor-not-allowed ${styles} ${className}`}
       {...props}
     />
   );
@@ -26,15 +26,15 @@ export function Button({
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
     <label className="flex flex-col gap-1 text-sm">
-      <span className="font-medium text-neutral-700">{label}</span>
+      <span className="font-medium text-muted">{label}</span>
       {children}
-      {hint && <span className="text-xs text-neutral-500">{hint}</span>}
+      {hint && <span className="text-xs text-muted">{hint}</span>}
     </label>
   );
 }
 
 const inputCls =
-  "min-h-11 w-full rounded-lg border border-neutral-300 bg-white px-3 text-base outline-none focus:border-black focus:ring-1 focus:ring-black";
+  "min-h-12 w-full rounded-control border border-border bg-surface px-3 text-base outline-none focus:border-ink focus:ring-2 focus:ring-primary/60";
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${inputCls} ${props.className ?? ""}`} />;
@@ -45,13 +45,13 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
 }
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-xl border border-neutral-200 bg-white p-4 ${className}`}>{children}</div>;
+  return <div className={`rounded-card border border-border bg-surface p-4 ${className}`}>{children}</div>;
 }
 
 export function PageHeader({ title, action }: { title: string; action?: ReactNode }) {
   return (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-      <h1 className="text-xl font-semibold sm:text-2xl">{title}</h1>
+      <h1 className="font-display text-title uppercase tracking-wide">{title}</h1>
       {action && <div className="flex flex-wrap gap-2">{action}</div>}
     </div>
   );
@@ -59,17 +59,17 @@ export function PageHeader({ title, action }: { title: string; action?: ReactNod
 
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "green" | "orange" | "red" }) {
   const t = {
-    neutral: "bg-neutral-100 text-neutral-700",
-    green: "bg-green-100 text-green-800",
-    orange: "bg-orange-100 text-orange-800",
-    red: "bg-red-100 text-red-800",
+    neutral: "bg-surface-2 text-ink",
+    green: "bg-success-soft text-success",
+    orange: "bg-warning-soft text-warning",
+    red: "bg-danger-soft text-danger",
   }[tone];
-  return <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium ${t}`}>{children}</span>;
+  return <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-caption font-semibold ${t}`}>{children}</span>;
 }
 
 export function ErrorBox({ message }: { message: string | null }) {
   if (!message) return null;
-  return <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{message}</p>;
+  return <p className="rounded-control bg-danger-soft p-3 text-sm text-danger">{message}</p>;
 }
 
 /** Feuille qui monte du bas sur téléphone, fenêtre centrée sur grand écran. */
@@ -87,17 +87,17 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
   }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 sm:items-center" onClick={onClose}>
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="flex max-h-[92dvh] w-full flex-col rounded-t-2xl bg-white sm:max-w-lg sm:rounded-2xl"
+        className="flex max-h-[92dvh] w-full flex-col rounded-t-[20px] bg-surface shadow-sheet sm:max-w-lg sm:rounded-[20px]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-lg font-semibold">{title}</h2>
-          <button onClick={onClose} aria-label="Fermer" className="flex size-11 items-center justify-center rounded-lg text-2xl hover:bg-neutral-100">
+          <button onClick={onClose} aria-label="Fermer" className="flex size-12 items-center justify-center rounded-control text-2xl hover:bg-surface-2">
             ×
           </button>
         </div>
@@ -108,5 +108,5 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <p className="rounded-xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-500">{children}</p>;
+  return <p className="rounded-card border border-dashed border-border p-6 text-center text-sm text-muted">{children}</p>;
 }

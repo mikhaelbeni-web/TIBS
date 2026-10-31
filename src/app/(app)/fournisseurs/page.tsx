@@ -20,7 +20,7 @@ export default function FournisseursPage() {
       <Input placeholder="Rechercher…" value={q} onChange={(e) => setQ(e.target.value)} className="mb-4" />
       <ErrorBox message={error} />
       {loading ? (
-        <p className="text-neutral-500">Chargement…</p>
+        <p className="text-muted">Chargement…</p>
       ) : shown.length === 0 ? (
         <Empty>Aucun fournisseur.</Empty>
       ) : (
@@ -28,10 +28,10 @@ export default function FournisseursPage() {
           {shown.map((s) => (
             <li key={s.id}>
               <button className="w-full text-left" onClick={() => setEditing(s)}>
-                <Card className="hover:border-black">
+                <Card className="hover:border-ink">
                   <div className="font-semibold">{s.nom}</div>
-                  <div className="text-sm text-neutral-600">{[s.categorie, s.email].filter(Boolean).join(" · ") || "—"}</div>
-                  {s.siret && <div className="text-xs text-neutral-500">SIRET {s.siret}</div>}
+                  <div className="text-sm text-muted">{[s.categorie, s.email].filter(Boolean).join(" · ") || "—"}</div>
+                  {s.siret && <div className="text-xs text-muted">SIRET {s.siret}</div>}
                 </Card>
               </button>
             </li>

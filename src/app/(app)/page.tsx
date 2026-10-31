@@ -48,10 +48,10 @@ export default function Dashboard() {
       <div className="grid gap-3 sm:grid-cols-3">
         {tiles.map((t) => (
           <Link key={t.href} href={t.href}>
-            <Card className="h-full hover:border-black">
-              <div className="text-sm text-neutral-500">{t.title}</div>
-              <div className="mt-1 text-2xl font-semibold">{t.value}</div>
-              <div className={`text-sm ${t.alert ? "font-medium text-red-700" : "text-neutral-500"}`}>{t.sub}</div>
+            <Card className="h-full hover:border-ink">
+              <div className="text-sm text-muted">{t.title}</div>
+              <div className="mt-1 font-display text-kpi">{t.value}</div>
+              <div className={`text-sm ${t.alert ? "font-medium text-danger" : "text-muted"}`}>{t.sub}</div>
             </Card>
           </Link>
         ))}

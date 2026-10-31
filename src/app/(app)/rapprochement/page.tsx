@@ -136,20 +136,20 @@ export default function RapprochementPage() {
       </div>
 
       <ErrorBox message={cash.error || bank.error || opError} />
-      {info && <p className="mb-3 rounded-lg bg-green-50 p-3 text-sm text-green-800">{info}</p>}
+      {info && <p className="mb-3 rounded-control bg-success-soft p-3 text-sm text-success">{info}</p>}
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card><div className="text-xs text-neutral-500">CB caisse</div><div className="text-lg font-semibold">{formatEuros(totalCbCaisse)}</div></Card>
+        <Card><div className="text-xs text-muted">CB caisse</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totalCbCaisse)}</div></Card>
         <Card>
-          <div className="text-xs text-neutral-500">CB pointée en banque</div>
-          <div className="text-lg font-semibold">{formatEuros(totalCbBanque)}</div>
-          <div className="text-xs text-neutral-500">{cb.unmatchedCash.length} jour(s) non pointé(s)</div>
+          <div className="text-xs text-muted">CB pointée en banque</div>
+          <div className="text-lg font-semibold tabular-nums">{formatEuros(totalCbBanque)}</div>
+          <div className="text-xs text-muted">{cb.unmatchedCash.length} jour(s) non pointé(s)</div>
         </Card>
-        <Card><div className="text-xs text-neutral-500">Espèces caisse</div><div className="text-lg font-semibold">{formatEuros(totalEsp)}</div></Card>
+        <Card><div className="text-xs text-muted">Espèces caisse</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totalEsp)}</div></Card>
         <Card>
-          <div className="text-xs text-neutral-500">Espèces déposées pointées</div>
-          <div className="text-lg font-semibold">{formatEuros(totalEspDeposes)}</div>
-          <div className={`text-xs ${totalEsp - totalEspDeposes ? "text-orange-700" : "text-neutral-500"}`}>
+          <div className="text-xs text-muted">Espèces déposées pointées</div>
+          <div className="text-lg font-semibold tabular-nums">{formatEuros(totalEspDeposes)}</div>
+          <div className={`text-xs ${totalEsp - totalEspDeposes ? "text-warning" : "text-muted"}`}>
             Non déposé : {formatEuros(totalEsp - totalEspDeposes)}
           </div>
         </Card>
@@ -162,7 +162,7 @@ export default function RapprochementPage() {
       </div>
 
       {cash.loading || bank.loading ? (
-        <p className="text-neutral-500">Chargement…</p>
+        <p className="text-muted">Chargement…</p>
       ) : tab === "cb" ? (
         <div className="space-y-4">
           {days.length === 0 && <Empty>Aucune journée de caisse ce mois-ci. Importez votre export ou ajoutez une journée.</Empty>}
@@ -174,7 +174,7 @@ export default function RapprochementPage() {
                   <Card className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="font-medium">Caisse du {fr(m.cash.date)} · {formatEuros(m.cash.amount)}</div>
-                      <div className="truncate text-sm text-neutral-600">
+                      <div className="truncate text-sm text-muted">
                         Banque le {fr(m.bank.date)} (J+{m.days}) · {formatEuros(m.bank.amount)} · {m.bank.libelle}
                       </div>
                     </div>
@@ -187,21 +187,21 @@ export default function RapprochementPage() {
             })}
           </ul>
           {cb.unmatchedCash.length > 0 && (
-            <Card className="border-red-200">
-              <div className="mb-2 font-medium text-red-700">Jours de caisse sans remise CB trouvée</div>
+            <Card className="border-danger/30">
+              <div className="mb-2 font-medium text-danger">Jours de caisse sans remise CB trouvée</div>
               <ul className="space-y-1 text-sm">
                 {cb.unmatchedCash.map((c) => (
                   <li key={c.id} className="flex justify-between gap-2"><span>{fr(c.date)}</span><span className="tabular-nums">{formatEuros(c.amount)}</span></li>
                 ))}
               </ul>
-              <p className="mt-2 text-xs text-neutral-500">
+              <p className="mt-2 text-xs text-muted">
                 Causes fréquentes : remise pas encore créditée, plusieurs jours regroupés, commission au-delà du seuil, transaction annulée en caisse.
               </p>
             </Card>
           )}
           {cb.unmatchedBank.length > 0 && (
-            <Card className="border-orange-200">
-              <div className="mb-2 font-medium text-orange-700">Crédits bancaires non rattachés</div>
+            <Card className="border-warning/30">
+              <div className="mb-2 font-medium text-warning">Crédits bancaires non rattachés</div>
               <ul className="space-y-1 text-sm">
                 {cb.unmatchedBank.map((b) => (
                   <li key={b.id} className="flex justify-between gap-2">
@@ -226,7 +226,7 @@ export default function RapprochementPage() {
                     <div className="font-medium">Dépôt du {fr(m.deposit.date)} · {formatEuros(m.deposit.amount)}</div>
                     <Badge tone="green">OK</Badge>
                   </div>
-                  <div className="text-sm text-neutral-600">
+                  <div className="text-sm text-muted">
                     Couvre : {m.days.map((d) => `${fr(d.date)} (${formatEuros(d.amount)})`).join(", ")}
                   </div>
                 </Card>
@@ -234,14 +234,14 @@ export default function RapprochementPage() {
             ))}
           </ul>
           {esp.unmatchedDeposits.length > 0 && (
-            <Card className="border-red-200">
-              <div className="mb-2 font-medium text-red-700">Dépôts qui ne correspondent à aucune suite de jours</div>
+            <Card className="border-danger/30">
+              <div className="mb-2 font-medium text-danger">Dépôts qui ne correspondent à aucune suite de jours</div>
               <ul className="space-y-1 text-sm">
                 {esp.unmatchedDeposits.map((d) => (
                   <li key={d.id} className="flex justify-between gap-2"><span>{fr(d.date)} · {d.libelle}</span><span className="tabular-nums">{formatEuros(d.amount)}</span></li>
                 ))}
               </ul>
-              <p className="mt-2 text-xs text-neutral-500">Écart possible : erreur de comptage, fond de caisse, sortie d&apos;espèces non saisie.</p>
+              <p className="mt-2 text-xs text-muted">Écart possible : erreur de comptage, fond de caisse, sortie d&apos;espèces non saisie.</p>
             </Card>
           )}
           {esp.unmatchedDays.length > 0 && (
@@ -260,25 +260,25 @@ export default function RapprochementPage() {
           {monthBank.length === 0 ? (
             <Empty>Aucune opération importée pour ce mois.</Empty>
           ) : (
-            <ul className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white">
+            <ul className="divide-y divide-border rounded-card border border-border bg-surface">
               {monthBank.map((b) => (
                 <li key={b.id} className="flex items-center justify-between gap-3 p-3 text-sm">
                   <div className="min-w-0">
                     <div className="truncate">{b.libelle}</div>
-                    <div className="text-xs text-neutral-500">{fr(b.date)}</div>
+                    <div className="text-xs text-muted">{fr(b.date)}</div>
                   </div>
-                  <span className={`shrink-0 font-medium tabular-nums ${b.montant < 0 ? "text-red-700" : "text-green-700"}`}>{formatEuros(b.montant)}</span>
+                  <span className={`shrink-0 font-medium tabular-nums ${b.montant < 0 ? "text-danger" : "text-success"}`}>{formatEuros(b.montant)}</span>
                 </li>
               ))}
             </ul>
           )}
           <h2 className="font-semibold">Journées de caisse</h2>
-          <ul className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white">
+          <ul className="divide-y divide-border rounded-card border border-border bg-surface">
             {days.map((d) => (
               <li key={d.id} className="flex items-center justify-between gap-3 p-3 text-sm">
                 <div>
                   <div className="font-medium">{fr(d.date)}</div>
-                  <div className="text-xs text-neutral-500">
+                  <div className="text-xs text-muted">
                     CB {formatEuros(d.cb)} · Esp. {formatEuros(d.especes)} · TR {formatEuros(d.ticketsResto)}
                   </div>
                 </div>
@@ -335,7 +335,7 @@ function CashForm({ existing, onDone }: { existing: Map<string, WithId<CashEntry
         <Field label="Tickets resto €"><Input inputMode="decimal" value={v.ticketsResto} onChange={(e) => setV({ ...v, ticketsResto: e.target.value })} /></Field>
         <Field label="Autres €"><Input inputMode="decimal" value={v.autres} onChange={(e) => setV({ ...v, autres: e.target.value })} /></Field>
       </div>
-      <p className="text-sm font-medium text-neutral-700">Ventes TTC par taux de TVA (pour l&apos;onglet TVA)</p>
+      <p className="text-sm font-medium text-muted">Ventes TTC par taux de TVA (pour l&apos;onglet TVA)</p>
       <div className="grid grid-cols-3 gap-2">
         <Field label="5,5 %"><Input inputMode="decimal" value={v.ttc55} onChange={(e) => setV({ ...v, ttc55: e.target.value })} /></Field>
         <Field label="10 %"><Input inputMode="decimal" value={v.ttc10} onChange={(e) => setV({ ...v, ttc10: e.target.value })} /></Field>
