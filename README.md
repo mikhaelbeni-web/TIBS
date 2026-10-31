@@ -61,7 +61,7 @@ Mise en place (une seule fois) :
 1. Console Google Cloud, projet `tiibs-2ac00` : activer **Gmail API**.
 2. Écran de consentement OAuth : type Externe, ajouter le scope `gmail.readonly`, puis **Publier l'application** (en mode Test, Google coupe l'accès au bout de 7 jours). Google affichera « application non validée » : Paramètres avancés > Continuer.
 3. Identifiants > Créer un ID client OAuth > Application Web, URI de redirection : `https://<domaine>/api/gmail/callback`.
-4. Vercel > Settings > Environment Variables : `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CRON_SECRET`, `FIREBASE_SERVICE_ACCOUNT` (et `ANTHROPIC_API_KEY` pour lire les PDF), puis redéployer.
+4. Vercel > Settings > Environment Variables : `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CRON_SECRET`, `FIREBASE_SERVICE_ACCOUNT` (contenu du fichier JSON de la clé, collé tel quel) (et `ANTHROPIC_API_KEY` pour lire les PDF), puis redéployer.
 5. Dans l'app : À vérifier > **Connecter Gmail**, choisir la boîte du restaurant.
 
 Les règles de tri (expéditeurs Uber, mots-clés, expéditeurs à ignorer) se règlent dans le document Firestore `settings/mail`, champ `regles`.
