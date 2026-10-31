@@ -4,6 +4,7 @@ import { deleteDoc, doc, setDoc, writeBatch } from "firebase/firestore";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
 import { bankDocId, isCashDeposit, isUber, rowToUber, rowsToCash } from "@/lib/cashImport";
+import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import { readSpreadsheet, rowToBank } from "@/lib/importer";
 import { formatEuros, toCents } from "@/lib/money";
@@ -23,6 +24,7 @@ function monthBounds(mois: string, extraDays: number) {
 }
 
 export default function RapprochementPage() {
+  const { rid } = useRestaurant();
   const cash = useCollection<CashEntry>("cashEntries", "date");
   const bank = useCollection<BankTransaction>("bankTransactions", "date");
   const uber = useCollection<UberPayout>("uberPayouts", "date");
@@ -89,7 +91,7 @@ export default function RapprochementPage() {
       const drafts = rowsToCash(await readSpreadsheet(f));
       if (!drafts.length) throw new Error("Aucune journée reconnue. Colonnes attendues : Date, CB, Espèces, Tickets resto, Autres (et TTC 5,5 / TTC 10 / TTC 20 pour la TVA).");
       const batch = writeBatch(db());
-      drafts.forEach((d) => batch.set(doc(db(), "cashEntries", d.date), { ...d, createdAt: Date.now() }));
+      drafts.forEach((d) => batch.set(doc(db(), "restaurants", rid, "cashEntries", d.date), { ...d, createdAt: Date.now() }));
       await batch.commit();
       setInfo(`${drafts.length} journée(s) de caisse importée(s).`);
     } catch (e) {
@@ -111,7 +113,7 @@ export default function RapprochementPage() {
         const key = `${r.date}_${r.montant}`;
         const n = seen.get(key) ?? 0;
         seen.set(key, n + 1);
-        batch.set(doc(db(), "uberPayouts", `${key}_${n}`), { ...r, createdAt: Date.now() });
+        batch.set(doc(db(), "restaurants", rid, "uberPayouts", `${key}_${n}`), { ...r, createdAt: Date.now() });
       }
       await batch.commit();
       setInfo(`${rows.length} versement(s) Uber Eats importé(s).`);
@@ -137,7 +139,7 @@ export default function RapprochementPage() {
           const key = `${r.date}|${r.montant}|${r.libelle}`;
           const n = seen.get(key) ?? 0;
           seen.set(key, n + 1);
-          batch.set(doc(db(), "bankTransactions", bankDocId(r.date, r.montant, r.libelle, n)), { ...r, importId, createdAt: Date.now() });
+          batch.set(doc(db(), "restaurants", rid, "bankTransactions", bankDocId(r.date, r.montant, r.libelle, n)), { ...r, importId, createdAt: Date.now() });
         }
         await batch.commit();
       }
@@ -377,7 +379,7 @@ export default function RapprochementPage() {
                     CB {formatEuros(d.cb)} · Esp. {formatEuros(d.especes)} · TR {formatEuros(d.ticketsResto)}
                   </div>
                 </div>
-                <Button variant="ghost" onClick={() => confirm(`Supprimer la journée du ${fr(d.date)} ?`) && deleteDoc(doc(db(), "cashEntries", d.id))}>
+                <Button variant="ghost" onClick={() => confirm(`Supprimer la journée du ${fr(d.date)} ?`) && deleteDoc(doc(db(), "restaurants", rid, "cashEntries", d.id))}>
                   Suppr.
                 </Button>
               </li>
@@ -394,6 +396,7 @@ export default function RapprochementPage() {
 }
 
 function CashForm({ existing, onDone }: { existing: Map<string, WithId<CashEntry>>; onDone: () => void }) {
+  const { rid } = useRestaurant();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [v, setV] = useState({ cb: "", especes: "", ticketsResto: "", autres: "", ttc55: "", ttc10: "", ttc20: "", note: "" });
   const [error, setError] = useState<string | null>(null);
@@ -414,7 +417,7 @@ function CashForm({ existing, onDone }: { existing: Map<string, WithId<CashEntry
     };
     if (existing.has(date) && !confirm("Une journée existe déjà à cette date. La remplacer ?")) return;
     try {
-      await setDoc(doc(db(), "cashEntries", date), data);
+      await setDoc(doc(db(), "restaurants", rid, "cashEntries", date), data);
       onDone();
     } catch (err) {
       setError((err as Error).message);

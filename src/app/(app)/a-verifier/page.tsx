@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
+import { useRestaurant } from "@/components/RestaurantProvider";
+import { isRestaurantId } from "@/lib/restaurants";
 import { db } from "@/lib/firebase";
 import type { InboxDoc, InboxItem } from "@/lib/ingest";
 import { formatEuros, toCents } from "@/lib/money";
@@ -46,15 +48,22 @@ async function api(user: { getIdToken: () => Promise<string> }, path: string) {
 
 /** Carte « Boîte mail » : connexion Gmail, dernier relevé, bouton pour relever tout de suite. */
 function MailCard() {
+  const { rid, current, setRid } = useRestaurant();
   const { user } = useAuth();
   const params = useSearchParams();
   const retour = params.get("gmail");
+  const retourRid = params.get("r");
+
+  // Retour de Google : on se place sur le restaurant dont on vient de connecter la boîte.
+  useEffect(() => {
+    if (isRestaurantId(retourRid) && retourRid !== rid) setRid(retourRid);
+  }, [retourRid, rid, setRid]);
   const [status, setStatus] = useState<MailStatus | null>(null);
   const [busy, setBusy] = useState<"connect" | "sync" | "disconnect" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
-  useEffect(() => onSnapshot(doc(db(), "settings", "mail"), (s) => setStatus((s.data() as MailStatus) ?? {}), (e) => setError(e.message)), []);
+  useEffect(() => onSnapshot(doc(db(), "restaurants", rid, "settings", "mail"), (s) => setStatus((s.data() as MailStatus) ?? {}), (e) => setError(e.message)), [rid]);
 
   async function run(kind: "connect" | "sync" | "disconnect") {
     if (!user) return;
@@ -63,12 +72,12 @@ function MailCard() {
     setInfo(null);
     try {
       if (kind === "connect") {
-        const { url } = await api(user, "/api/gmail/connect");
+        const { url } = await api(user, `/api/gmail/connect?r=${rid}`);
         window.location.assign(url);
         return;
       }
       if (kind === "disconnect" && !confirm("Déconnecter la boîte mail ? Les relevés automatiques s'arrêtent.")) return;
-      const r = await api(user, kind === "sync" ? "/api/gmail/sync" : "/api/gmail/disconnect");
+      const r = await api(user, `/api/gmail/${kind === "sync" ? "sync" : "disconnect"}?r=${rid}`);
       if (kind === "sync") {
         setInfo(
           r.status === "ok"
@@ -88,8 +97,8 @@ function MailCard() {
     <Card className="mb-4 space-y-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="font-semibold">Boîte mail</div>
-          <div className="truncate text-sm text-muted">{connected ? status!.adresse : "Pas encore connectée"}</div>
+          <div className="font-semibold">Boîte mail · {current.court}</div>
+          <div className="truncate text-sm text-muted">{connected ? status!.adresse : `À connecter : ${current.boiteMail}`}</div>
         </div>
         {status && <Badge tone={status.erreur ? "red" : connected ? "green" : "neutral"}>{status.erreur ? "À reconnecter" : connected ? "Connectée" : "Non connectée"}</Badge>}
       </div>
@@ -151,6 +160,7 @@ function formOf(item: InboxItem): Form {
 }
 
 function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mailbox?: string; onClose: () => void }) {
+  const { rid } = useRestaurant();
   const [f, setF] = useState<Form>(() => formOf(d.item));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -172,17 +182,17 @@ function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mai
         const tvaIn = f.tva ? toCents(f.tva) : null;
         const tva = tvaIn ?? (ht !== null ? ttc - ht : 0);
         // Fournisseur retrouvé par son nom (sans tenir compte de la casse), sinon créé.
-        const all = await getDocs(collection(db(), "suppliers"));
+        const all = await getDocs(collection(db(), "restaurants", rid, "suppliers"));
         const found = all.docs.find((s) => String(s.data().nom).toLowerCase() === nom.toLowerCase());
-        const supplierRef = found ? found.ref : doc(collection(db(), "suppliers"));
+        const supplierRef = found ? found.ref : doc(collection(db(), "restaurants", rid, "suppliers"));
         const fromEmail = d.item.source.from?.match(/<([^>]+)>/)?.[1] ?? d.item.source.from ?? "";
         if (!found) batch.set(supplierRef, { nom, email: fromEmail, createdAt: now });
         const numero = f.numero.trim();
         if (numero) {
-          const dup = await getDocs(query(collection(db(), "invoices"), where("numero", "==", numero)));
+          const dup = await getDocs(query(collection(db(), "restaurants", rid, "invoices"), where("numero", "==", numero)));
           if (dup.docs.some((x) => x.data().supplierId === supplierRef.id)) throw new Error(`La facture ${numero} de ${nom} existe déjà.`);
         }
-        batch.set(doc(collection(db(), "invoices")), {
+        batch.set(doc(collection(db(), "restaurants", rid, "invoices")), {
           supplierId: supplierRef.id,
           supplierNom: found ? String(found.data().nom) : nom,
           numero,
@@ -198,7 +208,7 @@ function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mai
         });
       } else {
         const frais = f.frais ? toCents(f.frais) : null;
-        batch.set(doc(db(), "uberPayouts", `${f.date}_${ttc}_0`), {
+        batch.set(doc(db(), "restaurants", rid, "uberPayouts", `${f.date}_${ttc}_0`), {
           date: f.date,
           montant: ttc,
           ...(d.item.brut !== undefined ? { brut: d.item.brut } : {}),
@@ -207,7 +217,7 @@ function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mai
           createdAt: now,
         });
       }
-      batch.update(doc(db(), "inbox", id), { statut: "valide", traiteLe: now });
+      batch.update(doc(db(), "restaurants", rid, "inbox", id), { statut: "valide", traiteLe: now });
       await batch.commit();
       onClose();
     } catch (e) {
@@ -221,7 +231,7 @@ function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mai
     setBusy(true);
     try {
       const batch = writeBatch(db());
-      batch.update(doc(db(), "inbox", id), { statut: "rejete", traiteLe: new Date().getTime() });
+      batch.update(doc(db(), "restaurants", rid, "inbox", id), { statut: "rejete", traiteLe: new Date().getTime() });
       await batch.commit();
       onClose();
     } catch (e) {
@@ -286,6 +296,7 @@ function amountOf(item: InboxItem) {
 
 /** Éléments reçus par mail (factures fournisseurs, versements Uber) en attente de validation. */
 function AVerifier() {
+  const { rid } = useRestaurant();
   const inbox = useCollection<InboxDoc>("inbox", "receivedAt", true);
   const [open, setOpen] = useState<string | null>(null);
   const [mailbox, setMailbox] = useState<string | undefined>();
@@ -293,7 +304,7 @@ function AVerifier() {
   const current = todo.find((i) => i.id === open);
   const close = useCallback(() => setOpen(null), []);
 
-  useEffect(() => onSnapshot(doc(db(), "settings", "mail"), (s) => setMailbox(s.get("adresse") as string | undefined), () => {}), []);
+  useEffect(() => onSnapshot(doc(db(), "restaurants", rid, "settings", "mail"), (s) => setMailbox(s.get("adresse") as string | undefined), () => {}), [rid]);
 
   return (
     <div>

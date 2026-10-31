@@ -49,6 +49,10 @@ Montants stockés en **centimes** (entiers).
 - Caisse : `Date ; CB ; Espèces ; Tickets resto ; Autres ; TTC 5,5 ; TTC 10 ; TTC 20`. Plusieurs lignes d'un même jour sont additionnées. Format provisoire en attendant un export réel de L'Addition.
 - Relevé bancaire : `Date ; Libellé ; Montant` ou `Date ; Libellé ; Débit ; Crédit`, CSV (UTF-8 ou Windows-1252) ou `.xlsx`.
 
+## Deux restaurants
+
+L'app gère **Manin 19e** (SAS AVA, 161 rue Manin) et **Prony 17e** (48 rue de Prony) comme deux portails séparés : la pastille en haut de l'écran change de restaurant. Toutes les données vivent sous `restaurants/{19e|17e}/…` (salariés, fournisseurs, factures, caisse, banque, Uber, TVA, boîte mail). Les données saisies avant ce découpage sont recopiées une fois dans Manin 19e (`/api/migrate`, les originaux restent en place).
+
 ## Boîte mail du restaurant (relevé automatique)
 
 L'app lit chaque matin (Vercel Cron, 5 h UTC) la boîte Gmail connectée, en lecture seule :
@@ -62,9 +66,9 @@ Mise en place (une seule fois) :
 2. Écran de consentement OAuth : type Externe, ajouter le scope `gmail.readonly`, puis **Publier l'application** (en mode Test, Google coupe l'accès au bout de 7 jours). Google affichera « application non validée » : Paramètres avancés > Continuer.
 3. Identifiants > Créer un ID client OAuth > Application Web, URI de redirection : `https://<domaine>/api/gmail/callback`.
 4. Vercel > Settings > Environment Variables : `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CRON_SECRET`, `FIREBASE_SERVICE_ACCOUNT` (contenu du fichier JSON de la clé, collé tel quel) (et `ANTHROPIC_API_KEY` pour lire les PDF), puis redéployer.
-5. Dans l'app : À vérifier > **Connecter Gmail**, choisir la boîte du restaurant.
+5. Dans l'app, pour chaque restaurant : choisir le restaurant, À vérifier > **Connecter Gmail**, choisir sa boîte (ava01012018@ pour le 19e, letibsprony17@ pour le 17e). Une facture qui mentionne clairement l'autre restaurant est déposée dans son portail.
 
-Les règles de tri (expéditeurs Uber, mots-clés, expéditeurs à ignorer) se règlent dans le document Firestore `settings/mail`, champ `regles`.
+Les règles de tri (fournisseurs connus, expéditeurs Uber, mots-clés, expéditeurs à ignorer) se règlent dans `restaurants/{id}/settings/mail`, champ `regles`.
 
 ## Développement local sans toucher la vraie base
 

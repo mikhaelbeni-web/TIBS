@@ -3,6 +3,7 @@
 import { addDoc, collection, deleteDoc, doc, updateDoc } from "firebase/firestore";
 import { useCallback, useState, type FormEvent } from "react";
 import { Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
+import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import type { Supplier, WithId } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
@@ -46,6 +47,7 @@ export default function FournisseursPage() {
 }
 
 function SupplierForm({ initial, onDone }: { initial: WithId<Supplier> | null; onDone: () => void }) {
+  const { rid } = useRestaurant();
   const [f, setF] = useState({
     nom: initial?.nom ?? "",
     siret: initial?.siret ?? "",
@@ -58,8 +60,8 @@ function SupplierForm({ initial, onDone }: { initial: WithId<Supplier> | null; o
     e.preventDefault();
     const data = { ...f, nom: f.nom.trim(), siret: f.siret.replace(/\s/g, "") };
     try {
-      if (initial) await updateDoc(doc(db(), "suppliers", initial.id), data);
-      else await addDoc(collection(db(), "suppliers"), { ...data, createdAt: Date.now() });
+      if (initial) await updateDoc(doc(db(), "restaurants", rid, "suppliers", initial.id), data);
+      else await addDoc(collection(db(), "restaurants", rid, "suppliers"), { ...data, createdAt: Date.now() });
       onDone();
     } catch (err) {
       setError((err as Error).message);
@@ -68,7 +70,7 @@ function SupplierForm({ initial, onDone }: { initial: WithId<Supplier> | null; o
 
   async function remove() {
     if (!initial || !confirm(`Supprimer ${initial.nom} ? Ses factures restent enregistrées.`)) return;
-    await deleteDoc(doc(db(), "suppliers", initial.id));
+    await deleteDoc(doc(db(), "restaurants", rid, "suppliers", initial.id));
     onDone();
   }
 

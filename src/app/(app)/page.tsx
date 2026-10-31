@@ -7,6 +7,7 @@ import { checkDpae } from "@/lib/dpae";
 import { formatEuros } from "@/lib/money";
 import { prochaineEcheanceTva } from "@/lib/tva";
 import { doc, onSnapshot } from "firebase/firestore";
+import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import type { AppSettings } from "@/lib/types";
 import type { InboxDoc } from "@/lib/ingest";
@@ -14,6 +15,7 @@ import type { CashEntry, Employee, Invoice } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 
 export default function Dashboard() {
+  const { rid } = useRestaurant();
   const employees = useCollection<Employee>("employees", "dateEmbauche", true);
   const invoices = useCollection<Invoice>("invoices", "dateFacture", true);
   const cash = useCollection<CashEntry>("cashEntries", "date", true);
@@ -22,7 +24,7 @@ export default function Dashboard() {
   const today = new Date().toISOString().slice(0, 10);
   const mois = today.slice(0, 7);
   const [settings, setSettings] = useState<AppSettings>({});
-  useEffect(() => onSnapshot(doc(db(), "settings", "app"), (s) => setSettings((s.data() as AppSettings) ?? {}), () => {}), []);
+  useEffect(() => onSnapshot(doc(db(), "restaurants", rid, "settings", "app"), (s) => setSettings((s.data() as AppSettings) ?? {}), () => {}), [rid]);
   const tva = prochaineEcheanceTva(today);
   const tvaEnvoyee = settings.tvaEnvois?.[tva.mois];
   const nomMois = new Date(`${tva.mois}-01T00:00:00Z`).toLocaleDateString("fr-FR", { month: "long", timeZone: "UTC" });
