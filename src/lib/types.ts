@@ -82,6 +82,8 @@ export interface CashEntry {
 export interface AppSettings {
   comptableEmail?: string;
   comptableNom?: string;
+  /** Mois de TVA envoyés au comptable : { "2026-10": "2026-11-08" } (date d'envoi). */
+  tvaEnvois?: Record<string, string>;
 }
 
 /** bankTransactions/{id} : lignes importées du relevé (id déterministe pour éviter les doublons). */
@@ -90,6 +92,16 @@ export interface BankTransaction {
   libelle: string;
   montant: number; // centimes, positif = crédit
   importId: string;
+  createdAt: number;
+}
+
+/** uberPayouts/{id} : versements Uber Eats importés depuis le Manager Uber Eats. */
+export interface UberPayout {
+  date: string; // AAAA-MM-JJ du versement
+  montant: number; // centimes nets versés
+  brut?: number; // ventes TTC de la période, si fournies
+  frais?: number; // commission / frais Uber, si fournis
+  reference?: string;
   createdAt: number;
 }
 

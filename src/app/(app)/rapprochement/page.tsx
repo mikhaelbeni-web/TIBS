@@ -3,12 +3,12 @@
 import { deleteDoc, doc, setDoc, writeBatch } from "firebase/firestore";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
-import { bankDocId, isCashDeposit, rowsToCash } from "@/lib/cashImport";
+import { bankDocId, isCashDeposit, isUber, rowToUber, rowsToCash } from "@/lib/cashImport";
 import { db } from "@/lib/firebase";
 import { readSpreadsheet, rowToBank } from "@/lib/importer";
 import { formatEuros, toCents } from "@/lib/money";
 import { reconcile, reconcileDeposits, type BankLine, type CashLine } from "@/lib/reconcile";
-import type { BankTransaction, CashEntry, WithId } from "@/lib/types";
+import type { BankTransaction, CashEntry, UberPayout, WithId } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 
 const fr = (iso: string) => iso.split("-").reverse().join("/");
@@ -25,8 +25,9 @@ function monthBounds(mois: string, extraDays: number) {
 export default function RapprochementPage() {
   const cash = useCollection<CashEntry>("cashEntries", "date");
   const bank = useCollection<BankTransaction>("bankTransactions", "date");
+  const uber = useCollection<UberPayout>("uberPayouts", "date");
   const [mois, setMois] = useState(thisMonth());
-  const [tab, setTab] = useState<"cb" | "especes" | "banque">("cb");
+  const [tab, setTab] = useState<"cb" | "especes" | "uber" | "banque">("cb");
   const [maxFee, setMaxFee] = useState("3");
   const [maxDays, setMaxDays] = useState("5");
   const [adding, setAdding] = useState(false);
@@ -34,6 +35,7 @@ export default function RapprochementPage() {
   const [info, setInfo] = useState<string | null>(null);
   const cashFile = useRef<HTMLInputElement>(null);
   const bankFile = useRef<HTMLInputElement>(null);
+  const uberFile = useRef<HTMLInputElement>(null);
 
   const { start, end, endPlus } = monthBounds(mois, 14);
   const days = useMemo(() => cash.items.filter((c) => c.date >= start && c.date <= end), [cash.items, start, end]);
@@ -46,7 +48,7 @@ export default function RapprochementPage() {
   const cb = useMemo(() => {
     const cashLines: CashLine[] = days.map((d) => ({ id: d.id, date: d.date, amount: d.cb }));
     const bankLines: BankLine[] = credits
-      .filter((b) => !isCashDeposit(b.libelle))
+      .filter((b) => !isCashDeposit(b.libelle) && !isUber(b.libelle))
       .map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle }));
     return reconcile(cashLines, bankLines, {
       maxDays: Number(maxDays) || 5,
@@ -62,6 +64,18 @@ export default function RapprochementPage() {
       .map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle }));
     return reconcileDeposits(cashLines, deposits, { maxDays: 14, tolerance: 0 });
   }, [days, credits]);
+
+  const ub = useMemo(() => {
+    const payouts: CashLine[] = uber.items
+      .filter((u) => u.date >= start && u.date <= end)
+      .map((u) => ({ id: u.id, date: u.date, amount: u.montant }));
+    const virements: BankLine[] = credits
+      .filter((b) => isUber(b.libelle))
+      .map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle }));
+    // Montants nets des deux côtés : égalité au centime, virement entre J-2 et J+5.
+    return reconcile(payouts, virements, { minDays: -2, maxDays: 5, maxFeeRate: 0, tolerance: 1 });
+  }, [uber.items, credits, start, end]);
+  const uberById = new Map(uber.items.map((u) => [u.id, u]));
 
   const totalCbCaisse = days.reduce((s, d) => s + d.cb, 0);
   const totalCbBanque = cb.matches.reduce((s, m) => s + m.bank.amount, 0);
@@ -82,6 +96,29 @@ export default function RapprochementPage() {
       setOpError((e as Error).message);
     } finally {
       if (cashFile.current) cashFile.current.value = "";
+    }
+  }
+
+  async function importUber(f?: File) {
+    if (!f) return;
+    setOpError(null);
+    try {
+      const rows = (await readSpreadsheet(f)).map(rowToUber).filter((r) => r !== null);
+      if (!rows.length) throw new Error("Aucun versement reconnu. Colonnes attendues : Date du versement, Montant net (et si possible Ventes, Frais Uber, Référence).");
+      const seen = new Map<string, number>();
+      const batch = writeBatch(db());
+      for (const r of rows) {
+        const key = `${r.date}_${r.montant}`;
+        const n = seen.get(key) ?? 0;
+        seen.set(key, n + 1);
+        batch.set(doc(db(), "uberPayouts", `${key}_${n}`), { ...r, createdAt: Date.now() });
+      }
+      await batch.commit();
+      setInfo(`${rows.length} versement(s) Uber Eats importé(s).`);
+    } catch (e) {
+      setOpError((e as Error).message);
+    } finally {
+      if (uberFile.current) uberFile.current.value = "";
     }
   }
 
@@ -122,20 +159,24 @@ export default function RapprochementPage() {
           <>
             <Button variant="secondary" onClick={() => cashFile.current?.click()}>Importer caisse</Button>
             <Button variant="secondary" onClick={() => bankFile.current?.click()}>Importer relevé</Button>
+            <Button variant="secondary" onClick={() => uberFile.current?.click()}>Importer Uber</Button>
             <Button onClick={() => setAdding(true)}>+ Journée</Button>
           </>
         }
       />
       <input ref={cashFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importCash(e.target.files?.[0])} />
       <input ref={bankFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importBank(e.target.files?.[0])} />
+      <input ref={uberFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importUber(e.target.files?.[0])} />
 
-      <div className="mb-4 grid grid-cols-3 gap-2 sm:max-w-xl">
-        <Field label="Mois"><Input type="month" value={mois} onChange={(e) => setMois(e.target.value || thisMonth())} /></Field>
-        <Field label="Commission max %"><Input inputMode="decimal" value={maxFee} onChange={(e) => setMaxFee(e.target.value)} /></Field>
-        <Field label="Délai max (j)"><Input inputMode="numeric" value={maxDays} onChange={(e) => setMaxDays(e.target.value)} /></Field>
+      <div className="mb-4 grid grid-cols-2 items-end gap-2 sm:max-w-xl sm:grid-cols-3">
+        <div className="col-span-2 sm:col-span-1">
+          <Field label="Mois"><Input type="month" value={mois} onChange={(e) => setMois(e.target.value || thisMonth())} /></Field>
+        </div>
+        <Field label="Commission CB max %"><Input inputMode="decimal" value={maxFee} onChange={(e) => setMaxFee(e.target.value)} /></Field>
+        <Field label="Délai max (jours)"><Input inputMode="numeric" value={maxDays} onChange={(e) => setMaxDays(e.target.value)} /></Field>
       </div>
 
-      <ErrorBox message={cash.error || bank.error || opError} />
+      <ErrorBox message={cash.error || bank.error || uber.error || opError} />
       {info && <p className="mb-3 rounded-control bg-success-soft p-3 text-sm text-success">{info}</p>}
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -155,13 +196,14 @@ export default function RapprochementPage() {
         </Card>
       </div>
 
-      <div className="mb-4 grid grid-cols-3 gap-2 sm:flex">
+      <div className="mb-4 grid grid-cols-4 gap-2 sm:flex">
         <Button variant={tab === "cb" ? "primary" : "secondary"} onClick={() => setTab("cb")}>CB</Button>
         <Button variant={tab === "especes" ? "primary" : "secondary"} onClick={() => setTab("especes")}>Espèces</Button>
+        <Button variant={tab === "uber" ? "primary" : "secondary"} onClick={() => setTab("uber")}>Uber</Button>
         <Button variant={tab === "banque" ? "primary" : "secondary"} onClick={() => setTab("banque")}>Relevé</Button>
       </div>
 
-      {cash.loading || bank.loading ? (
+      {cash.loading || bank.loading || uber.loading ? (
         <p className="text-muted">Chargement…</p>
       ) : tab === "cb" ? (
         <div className="space-y-4">
@@ -204,6 +246,59 @@ export default function RapprochementPage() {
               <div className="mb-2 font-medium text-warning">Crédits bancaires non rattachés</div>
               <ul className="space-y-1 text-sm">
                 {cb.unmatchedBank.map((b) => (
+                  <li key={b.id} className="flex justify-between gap-2">
+                    <span className="truncate">{fr(b.date)} · {b.libelle}</span>
+                    <span className="shrink-0 tabular-nums">{formatEuros(b.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+        </div>
+      ) : tab === "uber" ? (
+        <div className="space-y-4">
+          {ub.matches.length === 0 && ub.unmatchedCash.length === 0 && ub.unmatchedBank.length === 0 && (
+            <Empty>Aucun versement Uber Eats ce mois-ci. Importe le relevé de paiements depuis le Manager Uber Eats.</Empty>
+          )}
+          <ul className="space-y-2">
+            {ub.matches.map((m) => {
+              const p = uberById.get(m.cash.id);
+              return (
+                <li key={m.cash.id}>
+                  <Card className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-medium">Versement du {fr(m.cash.date)} · {formatEuros(m.cash.amount)}</div>
+                      <div className="truncate text-sm text-muted">
+                        Banque le {fr(m.bank.date)} · {m.bank.libelle}
+                        {p?.brut ? ` · ventes ${formatEuros(p.brut)}` : ""}
+                        {p?.frais ? ` · frais ${formatEuros(p.frais)}` : ""}
+                      </div>
+                    </div>
+                    <Badge tone="green">Rapproché</Badge>
+                  </Card>
+                </li>
+              );
+            })}
+          </ul>
+          {ub.unmatchedCash.length > 0 && (
+            <Card className="border-danger/30">
+              <div className="mb-2 font-medium text-danger">Versements Uber sans virement trouvé en banque</div>
+              <ul className="space-y-1 text-sm">
+                {ub.unmatchedCash.map((c) => (
+                  <li key={c.id} className="flex justify-between gap-2">
+                    <span>{fr(c.date)}{uberById.get(c.id)?.reference ? ` · ${uberById.get(c.id)?.reference}` : ""}</span>
+                    <span className="tabular-nums">{formatEuros(c.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-muted">Virement pas encore arrivé, montant différent (ajustement, remboursement client) ou relevé bancaire pas encore importé.</p>
+            </Card>
+          )}
+          {ub.unmatchedBank.length > 0 && (
+            <Card className="border-warning/30">
+              <div className="mb-2 font-medium text-warning">Virements UBER en banque sans versement correspondant</div>
+              <ul className="space-y-1 text-sm">
+                {ub.unmatchedBank.map((b) => (
                   <li key={b.id} className="flex justify-between gap-2">
                     <span className="truncate">{fr(b.date)} · {b.libelle}</span>
                     <span className="shrink-0 tabular-nums">{formatEuros(b.amount)}</span>
@@ -329,14 +424,14 @@ function CashForm({ existing, onDone }: { existing: Map<string, WithId<CashEntry
   return (
     <form onSubmit={submit} className="space-y-3">
       <Field label="Date"><Input type="date" required value={date} onChange={(e) => setDate(e.target.value)} /></Field>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 items-end gap-3">
         <Field label="CB €"><Input inputMode="decimal" value={v.cb} onChange={(e) => setV({ ...v, cb: e.target.value })} /></Field>
         <Field label="Espèces €"><Input inputMode="decimal" value={v.especes} onChange={(e) => setV({ ...v, especes: e.target.value })} /></Field>
         <Field label="Tickets resto €"><Input inputMode="decimal" value={v.ticketsResto} onChange={(e) => setV({ ...v, ticketsResto: e.target.value })} /></Field>
         <Field label="Autres €"><Input inputMode="decimal" value={v.autres} onChange={(e) => setV({ ...v, autres: e.target.value })} /></Field>
       </div>
       <p className="text-sm font-medium text-muted">Ventes TTC par taux de TVA (pour l&apos;onglet TVA)</p>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-3 items-end gap-2">
         <Field label="5,5 %"><Input inputMode="decimal" value={v.ttc55} onChange={(e) => setV({ ...v, ttc55: e.target.value })} /></Field>
         <Field label="10 %"><Input inputMode="decimal" value={v.ttc10} onChange={(e) => setV({ ...v, ttc10: e.target.value })} /></Field>
         <Field label="20 %"><Input inputMode="decimal" value={v.ttc20} onChange={(e) => setV({ ...v, ttc20: e.target.value })} /></Field>

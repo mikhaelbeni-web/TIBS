@@ -199,3 +199,45 @@ describe("TVA", () => {
     expect(r.nonVentile).toEqual({ jours: ["2026-10-02"], montant: 5000 });
   });
 });
+
+import { echeanceDuMois, prochaineEcheanceTva } from "../tva";
+
+describe("échéance TVA (le 10)", () => {
+  it("avant ou le 10 : mois précédent, échéance ce mois-ci", () => {
+    expect(prochaineEcheanceTva("2026-11-03")).toEqual({ mois: "2026-10", date: "2026-11-10", joursRestants: 7 });
+    expect(prochaineEcheanceTva("2026-11-10")).toEqual({ mois: "2026-10", date: "2026-11-10", joursRestants: 0 });
+  });
+  it("après le 10 : mois en cours, échéance le mois suivant (passage d'année)", () => {
+    expect(prochaineEcheanceTva("2026-10-31")).toEqual({ mois: "2026-10", date: "2026-11-10", joursRestants: 10 });
+    expect(prochaineEcheanceTva("2026-12-15")).toEqual({ mois: "2026-12", date: "2027-01-10", joursRestants: 26 });
+    expect(prochaineEcheanceTva("2027-01-05")).toEqual({ mois: "2026-12", date: "2027-01-10", joursRestants: 5 });
+    expect(echeanceDuMois("2026-12")).toBe("2027-01-10");
+  });
+});
+
+import { isUber, rowToUber } from "../cashImport";
+
+describe("Uber Eats", () => {
+  it("lit une ligne de versement", () => {
+    expect(rowToUber({ datedeversement: "03/10/2026", montantnet: "1 234,50", fraisuber: "-300,00", reference: "PO-1" })).toEqual({
+      date: "2026-10-03",
+      montant: 123450,
+      frais: 30000,
+      reference: "PO-1",
+    });
+    expect(rowToUber({ date: "x", montant: "1" })).toBeNull();
+  });
+  it("rapproche un versement avec le virement UBER, même arrivé la veille", () => {
+    expect(isUber("VIR SEPA UBER EATS FRANCE")).toBe(true);
+    const r = reconcile(
+      [{ id: "p1", date: "2026-10-06", amount: 123450 }],
+      [
+        { id: "b1", date: "2026-10-05", amount: 123450, libelle: "VIR UBER EATS" },
+        { id: "b2", date: "2026-10-06", amount: 99999, libelle: "VIR UBER EATS" },
+      ],
+      { minDays: -2, maxDays: 5, maxFeeRate: 0, tolerance: 1 },
+    );
+    expect(r.matches.map((m) => m.bank.id)).toEqual(["b1"]);
+    expect(r.unmatchedBank.map((b) => b.id)).toEqual(["b2"]);
+  });
+});

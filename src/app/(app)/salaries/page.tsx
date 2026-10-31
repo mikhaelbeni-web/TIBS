@@ -253,7 +253,7 @@ function EmployeeForm({ initial, onDone }: { initial: WithId<Employee> | null; o
 
   return (
     <form onSubmit={submit} className="space-y-3">
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid items-end gap-3 sm:grid-cols-2">
         <Field label="Nom"><Input required value={f.nom} onChange={(e) => set("nom", e.target.value)} /></Field>
         <Field label="Prénom"><Input required value={f.prenom} onChange={(e) => set("prenom", e.target.value)} /></Field>
         <Field label="Nom de naissance" hint="Si différent"><Input value={f.nomNaissance ?? ""} onChange={(e) => set("nomNaissance", e.target.value)} /></Field>

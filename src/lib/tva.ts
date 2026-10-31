@@ -59,3 +59,36 @@ export function tvaReport(cash: CashEntry[], invoices: Invoice[], from: string, 
     net: totalCollectee - deductible,
   };
 }
+
+/** Jour du mois où la TVA du mois précédent part chez le comptable. */
+export const JOUR_ENVOI_TVA = 10;
+
+/** Date limite d'envoi de la TVA d'un mois (AAAA-MM) : le 10 du mois suivant. */
+export function echeanceDuMois(mois: string, jour = JOUR_ENVOI_TVA): string {
+  const [y, m] = mois.split("-").map(Number);
+  return new Date(Date.UTC(y, m, jour)).toISOString().slice(0, 10);
+}
+
+export interface EcheanceTva {
+  mois: string; // AAAA-MM déclaré
+  date: string; // AAAA-MM-JJ limite d'envoi
+  joursRestants: number;
+}
+
+/**
+ * Prochaine échéance d'envoi au comptable : le 10 du mois suivant la période.
+ * Jusqu'au 10 inclus, on est encore sur le mois précédent ; après, sur le mois en cours.
+ */
+export function prochaineEcheanceTva(today: string, jour = JOUR_ENVOI_TVA): EcheanceTva {
+  const [y, m, d] = today.split("-").map(Number);
+  // Mois de l'échéance (1-12) : celui-ci si on n'a pas dépassé le jour, sinon le suivant.
+  const dueIdx = d <= jour ? m - 1 : m; // index 0-based, peut valoir 12
+  const due = new Date(Date.UTC(y, dueIdx, jour));
+  const period = new Date(Date.UTC(y, dueIdx - 1, 1));
+  const date = due.toISOString().slice(0, 10);
+  return {
+    mois: period.toISOString().slice(0, 7),
+    date,
+    joursRestants: Math.round((Date.parse(date) - Date.parse(today)) / 86400000),
+  };
+}

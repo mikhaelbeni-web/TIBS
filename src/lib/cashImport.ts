@@ -54,3 +54,36 @@ export function bankDocId(date: string, montant: number, libelle: string, occurr
   const slug = normalizeHeader(libelle).slice(0, 40) || "x";
   return `${date}_${montant}_${slug}_${occurrence}`;
 }
+
+/** Virement Uber Eats sur le relevé bancaire. */
+export function isUber(libelle: string): boolean {
+  return /uber/i.test(libelle);
+}
+
+export interface UberDraft {
+  date: string;
+  montant: number;
+  brut?: number;
+  frais?: number;
+  reference?: string;
+}
+
+/**
+ * Format générique en attendant l'export réel du Manager Uber Eats :
+ * Date du versement ; Montant net ; (Ventes) ; (Frais Uber) ; (Référence).
+ */
+export function rowToUber(row: Row): UberDraft | null {
+  const date = toIsoDate(pick(row, ["date du versement", "date de versement", "date de paiement", "date du virement", "payout date", "date"]));
+  const montant = toCents(pick(row, ["montant net", "versement", "montant du versement", "montant du virement", "net payout", "total payout", "montant"]));
+  if (!date || montant === null) return null;
+  const brut = toCents(pick(row, ["ventes", "total des ventes", "ventes ttc", "sales", "gross sales"]));
+  const frais = toCents(pick(row, ["frais uber", "frais", "commission", "uber fee", "marketplace fee"]));
+  const ref = pick(row, ["reference", "référence", "id du versement", "payout id", "id"]);
+  return {
+    date,
+    montant,
+    ...(brut !== null ? { brut } : {}),
+    ...(frais !== null ? { frais: Math.abs(frais) } : {}),
+    ...(ref !== undefined ? { reference: String(ref).trim() } : {}),
+  };
+}

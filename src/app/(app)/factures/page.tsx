@@ -200,7 +200,7 @@ function InvoiceForm({ initial, suppliers, onDone }: { initial: WithId<Invoice> 
           {suppliers.map((s) => <option key={s.id} value={s.id}>{s.nom}</option>)}
         </Select>
       </Field>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 items-end gap-3">
         <Field label="N° de facture"><Input required value={f.numero} onChange={(e) => setF({ ...f, numero: e.target.value })} /></Field>
         <Field label="Statut">
           <Select value={f.statut} onChange={(e) => setF({ ...f, statut: e.target.value as StatutFacture })}>
@@ -212,7 +212,7 @@ function InvoiceForm({ initial, suppliers, onDone }: { initial: WithId<Invoice> 
         <Field label="Date"><Input type="date" required value={f.dateFacture} onChange={(e) => setF({ ...f, dateFacture: e.target.value })} /></Field>
         <Field label="Échéance"><Input type="date" value={f.dateEcheance} onChange={(e) => setF({ ...f, dateEcheance: e.target.value })} /></Field>
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-3 items-end gap-2">
         <Field label="HT €"><Input inputMode="decimal" value={f.ht} onChange={(e) => setF({ ...f, ht: e.target.value })} /></Field>
         <Field label="TVA €"><Input inputMode="decimal" value={f.tva} onChange={(e) => setF({ ...f, tva: e.target.value })} /></Field>
         <Field label="TTC €"><Input inputMode="decimal" placeholder={ttc !== null ? euros(ttc) : ""} value={f.ttc} onChange={(e) => setF({ ...f, ttc: e.target.value })} /></Field>

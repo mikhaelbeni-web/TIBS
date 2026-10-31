@@ -6,7 +6,7 @@ import { Button, Card, ErrorBox, Field, Input, PageHeader, Select } from "@/comp
 import { db } from "@/lib/firebase";
 import { formatEuros } from "@/lib/money";
 import type { AppSettings, CashEntry, Invoice } from "@/lib/types";
-import { tvaReport } from "@/lib/tva";
+import { echeanceDuMois, prochaineEcheanceTva, tvaReport } from "@/lib/tva";
 import { useCollection } from "@/lib/useCollection";
 
 type Periode = "mois" | "trimestre" | "libre";
@@ -17,13 +17,9 @@ const lastDay = (ym: string) => {
 };
 const num = (c: number) => (c / 100).toFixed(2).replace(".", ",");
 
-/** Mois précédent : c'est en général celui qu'on déclare. */
-function previousMonth(): string {
-  const d = new Date();
-  d.setDate(1);
-  d.setMonth(d.getMonth() - 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
+const today = () => new Date().toISOString().slice(0, 10);
+/** Mois de la prochaine échéance (envoi le 10 du mois suivant). */
+const previousMonth = () => prochaineEcheanceTva(today()).mois;
 
 export default function TvaPage() {
   const cash = useCollection<CashEntry>("cashEntries", "date");
@@ -56,10 +52,22 @@ export default function TvaPage() {
 
   const r = useMemo(() => tvaReport(cash.items, invoices.items, from, to), [cash.items, invoices.items, from, to]);
   const label = `du ${fr(from)} au ${fr(to)}`;
+  const echeance = prochaineEcheanceTva(today());
+  const envoiMois = periode === "mois" ? settings.tvaEnvois?.[mois] : undefined;
+
+  async function marquerEnvoye() {
+    const tvaEnvois = { ...(settings.tvaEnvois ?? {}), [mois]: today() };
+    try {
+      await setDoc(doc(db(), "settings", "app"), { tvaEnvois }, { merge: true });
+      setSettings({ ...settings, tvaEnvois });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   function exportCsv() {
     const lines = [
-      `Rapport TVA TIBS ${label}`,
+      `Rapport TVA Le Tib's ${label}`,
       "",
       "TVA COLLECTÉE (ventes);Taux;TTC;HT;TVA",
       ...r.collectee.map((l) => `Ventes;${l.label};${num(l.ttc)};${num(l.ht)};${num(l.tva)}`),
@@ -91,7 +99,7 @@ export default function TvaPage() {
     const body = [
       `Bonjour${settings.comptableNom ? " " + settings.comptableNom : ""},`,
       "",
-      `Voici les éléments de TVA du restaurant TIBS ${label} :`,
+      `Voici les éléments de TVA du restaurant Le Tib's ${label} :`,
       ...r.collectee.filter((l) => l.ttc).map((l) => `- Ventes à ${l.label} : ${formatEuros(l.ttc)} TTC, TVA ${formatEuros(l.tva)}`),
       `- TVA collectée : ${formatEuros(r.totalCollectee)}`,
       `- TVA déductible (${r.nbFactures} factures fournisseurs) : ${formatEuros(r.deductible)}`,
@@ -101,7 +109,7 @@ export default function TvaPage() {
       "",
       "Cordialement",
     ].join("\n");
-    const subject = `TVA TIBS ${label}`;
+    const subject = `TVA Le Tib's ${label}`;
     window.location.href = `mailto:${settings.comptableEmail ?? ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   }
 
@@ -127,7 +135,7 @@ export default function TvaPage() {
         }
       />
 
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:max-w-xl">
+      <div className="mb-4 grid grid-cols-2 items-end gap-3 sm:max-w-xl">
         <Field label="Période">
           <Select value={periode} onChange={(e) => setPeriode(e.target.value as Periode)}>
             <option value="mois">Mois</option>
@@ -147,6 +155,20 @@ export default function TvaPage() {
         )}
       </div>
       <p className="mb-4 text-sm text-muted">Période {label}</p>
+
+      {periode === "mois" && (
+        <Card className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          {envoiMois ? (
+            <p className="text-sm text-success">TVA de ce mois envoyée au comptable le {fr(envoiMois)}.</p>
+          ) : (
+            <p className={`text-sm ${mois === echeance.mois && echeance.joursRestants <= 3 ? "font-medium text-danger" : "text-ink"}`}>
+              À envoyer au comptable avant le {fr(echeanceDuMois(mois))}
+              {mois === echeance.mois && ` (J-${echeance.joursRestants})`}.
+            </p>
+          )}
+          {!envoiMois && <Button variant="secondary" onClick={marquerEnvoye}>Marquer comme envoyée</Button>}
+        </Card>
+      )}
 
       <ErrorBox message={cash.error || invoices.error || error} />
 

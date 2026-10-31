@@ -1,10 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, PageHeader } from "@/components/ui";
 import { checkDpae } from "@/lib/dpae";
 import { formatEuros } from "@/lib/money";
+import { prochaineEcheanceTva } from "@/lib/tva";
+import { doc, onSnapshot } from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import type { AppSettings } from "@/lib/types";
 import type { CashEntry, Employee, Invoice } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 
@@ -12,7 +16,13 @@ export default function Dashboard() {
   const employees = useCollection<Employee>("employees", "dateEmbauche", true);
   const invoices = useCollection<Invoice>("invoices", "dateFacture", true);
   const cash = useCollection<CashEntry>("cashEntries", "date", true);
-  const mois = new Date().toISOString().slice(0, 7);
+  const today = new Date().toISOString().slice(0, 10);
+  const mois = today.slice(0, 7);
+  const [settings, setSettings] = useState<AppSettings>({});
+  useEffect(() => onSnapshot(doc(db(), "settings", "app"), (s) => setSettings((s.data() as AppSettings) ?? {}), () => {}), []);
+  const tva = prochaineEcheanceTva(today);
+  const tvaEnvoyee = settings.tvaEnvois?.[tva.mois];
+  const nomMois = new Date(`${tva.mois}-01T00:00:00Z`).toLocaleDateString("fr-FR", { month: "long", timeZone: "UTC" });
 
   const dpae = useMemo(() => {
     const todo = employees.items.filter((e) => e.dpaeStatut !== "declaree");
@@ -40,12 +50,19 @@ export default function Dashboard() {
       sub: `${monthCash.length} journée(s) saisie(s)`,
       alert: false,
     },
+    {
+      href: "/tva",
+      title: `TVA de ${nomMois}`,
+      value: tvaEnvoyee ? "Envoyée" : `J-${tva.joursRestants}`,
+      sub: tvaEnvoyee ? `le ${tvaEnvoyee.split("-").reverse().join("/")}` : `à envoyer avant le ${tva.date.split("-").reverse().join("/")}`,
+      alert: !tvaEnvoyee && tva.joursRestants <= 3,
+    },
   ];
 
   return (
     <div>
       <PageHeader title="Tableau de bord" />
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {tiles.map((t) => (
           <Link key={t.href} href={t.href}>
             <Card className="h-full hover:border-ink">

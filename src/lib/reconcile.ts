@@ -14,6 +14,8 @@ export interface BankLine {
 }
 
 export interface MatchOptions {
+  /** Délai min (négatif = le crédit peut arriver avant la date côté caisse/plateforme). */
+  minDays?: number;
   /** Délai max entre le Z et le crédit bancaire (remises CB : J+1 à J+3 en général). */
   maxDays: number;
   /** Commission bancaire max tolérée, en fraction (0.03 = 3 %). */
@@ -54,11 +56,11 @@ export function reconcile(
     for (const b of bank) {
       if (b.amount <= 0) continue;
       const days = daysBetween(c.date, b.date);
-      if (days < 0 || days > options.maxDays) continue;
+      if (days < (options.minDays ?? 0) || days > options.maxDays) continue;
       const ecart = b.amount - c.amount;
       if (ecart > options.tolerance) continue;
       if (b.amount < Math.floor(c.amount * (1 - options.maxFeeRate))) continue;
-      const score = Math.abs(ecart) / c.amount + days * 0.001;
+      const score = Math.abs(ecart) / c.amount + Math.abs(days) * 0.001;
       candidates.push({ cash: c, bank: b, ecart, days, score });
     }
   }
