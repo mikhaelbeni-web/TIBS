@@ -19,6 +19,9 @@
   /* Marque : ambre du site. En FOND uniquement (texte encre dessus), jamais en texte sur blanc (contraste 2:1). Jamais un statut. */
   --tibs-brand:         #F5A623;
   --tibs-brand-soft:    #FEF1D9;
+  /* Restaurants : couleur d'identification du portail (pastille, carré, exports), toujours avec le nom. */
+  --tibs-site-19:       #F5A623;  /* Manin 19e */
+  --tibs-site-17:       #6D4AE8;  /* Prony 17e, texte blanc dessus 5.6:1 */
   --tibs-bar:           #3F3F3F;  /* anthracite du bandeau : barre d'onglets, tuile CA */
 
   /* Action principale : bouton ambre, texte encre (10:1) */
@@ -71,6 +74,8 @@
   --tibs-ink-inverse:   #1C1C1C;
   --tibs-brand:         #F5A623;
   --tibs-brand-soft:    #3A2A0E;
+  --tibs-site-19:       #F5A623;
+  --tibs-site-17:       #8E73FF;
   --tibs-bar:           #2A2A2A;
   --tibs-primary:       #F5A623;
   --tibs-primary-fg:    #1C1C1C;

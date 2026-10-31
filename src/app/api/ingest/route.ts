@@ -1,8 +1,9 @@
+import { DEFAULT_RESTAURANT, isRestaurantId } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
 import { inboxDocId, parseInboxItem, safeEqual, type InboxDoc } from "@/lib/ingest";
 
 /**
- * POST /api/ingest — réservé à la tâche quotidienne qui lit les mails.
+ * POST /api/ingest?r=19e — réservé à la tâche quotidienne qui lit les mails.
  * En-tête : Authorization: Bearer <INGEST_TOKEN>
  * Corps : { "items": [ { "kind": "facture" | "uber", ..., "source": { "messageId": "..." } } ] }
  * Réponse : { created, skipped, errors: [{ index, error }] }
@@ -13,6 +14,9 @@ export async function POST(request: Request) {
   if (!token || token.length < 32 || !safeEqual(auth, `Bearer ${token}`)) {
     return Response.json({ error: "non autorisé" }, { status: 401 });
   }
+
+  const rid = new URL(request.url).searchParams.get("r") ?? DEFAULT_RESTAURANT;
+  if (!isRestaurantId(rid)) return Response.json({ error: "restaurant inconnu" }, { status: 400 });
 
   let body: unknown;
   try {
@@ -39,7 +43,7 @@ export async function POST(request: Request) {
     }
     const n = perMessage.get(item.source.messageId) ?? 0;
     perMessage.set(item.source.messageId, n + 1);
-    const ref = db.collection("inbox").doc(inboxDocId(item.source.messageId, n));
+    const ref = db.collection(`restaurants/${rid}/inbox`).doc(inboxDocId(item.source.messageId, n));
     const data: InboxDoc = { item, statut: "a_verifier", receivedAt: Date.now() };
     try {
       await ref.create(data); // échoue si déjà reçu : la tâche peut repasser sur le même mail sans doublon

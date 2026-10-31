@@ -15,69 +15,81 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "gerant";
     }
 
+    // Le gérant a accès aux deux restaurants ; tout autre identifiant de restaurant est refusé.
+    function gerantDe(rid) {
+      return isGerant() && rid in ["19e", "17e"];
+    }
+
     // Chacun peut lire son propre profil (pour connaître son rôle). Aucune écriture côté client.
     match /users/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
       allow write: if false;
     }
 
-    // Salariés : contient le NIR (donnée sensible), gérant uniquement.
-    match /employees/{id} {
-      allow read, delete: if isGerant();
-      allow create, update: if isGerant()
-        && request.resource.data.nom is string
-        && request.resource.data.prenom is string
-        && request.resource.data.dpaeStatut in ["a_declarer", "declaree"];
-    }
+    // Deux restaurants gérés comme deux portails séparés : toutes les données vivent sous restaurants/{rid}.
+    // Les sous-collections private (jeton Gmail) et mailLog ne sont accessibles qu'au serveur.
+    match /restaurants/{rid} {
+      allow read: if gerantDe(rid);
+      allow write: if false;
 
-    match /suppliers/{id} {
-      allow read, delete: if isGerant();
-      allow create, update: if isGerant() && request.resource.data.nom is string;
-    }
+      // Salariés : contient le NIR (donnée sensible), gérant uniquement.
+      match /employees/{id} {
+        allow read, delete: if gerantDe(rid);
+        allow create, update: if gerantDe(rid)
+          && request.resource.data.nom is string
+          && request.resource.data.prenom is string
+          && request.resource.data.dpaeStatut in ["a_declarer", "declaree"];
+      }
 
-    match /invoices/{id} {
-      allow read, delete: if isGerant();
-      allow create, update: if isGerant()
-        && request.resource.data.montantTTC is int
-        && request.resource.data.statut in ["a_payer", "payee", "litige"]
-        && request.resource.data.mois is string;
-    }
+      match /suppliers/{id} {
+        allow read, delete: if gerantDe(rid);
+        allow create, update: if gerantDe(rid) && request.resource.data.nom is string;
+      }
 
-    match /cashEntries/{date} {
-      allow read, delete: if isGerant();
-      allow create, update: if isGerant()
-        && request.resource.data.date == date
-        && request.resource.data.cb is int
-        && request.resource.data.especes is int;
-    }
+      match /invoices/{id} {
+        allow read, delete: if gerantDe(rid);
+        allow create, update: if gerantDe(rid)
+          && request.resource.data.montantTTC is int
+          && request.resource.data.statut in ["a_payer", "payee", "litige"]
+          && request.resource.data.mois is string;
+      }
 
-    match /bankTransactions/{id} {
-      allow read, delete: if isGerant();
-      allow create, update: if isGerant()
-        && request.resource.data.montant is int
-        && request.resource.data.date is string;
-    }
+      match /cashEntries/{date} {
+        allow read, delete: if gerantDe(rid);
+        allow create, update: if gerantDe(rid)
+          && request.resource.data.date == date
+          && request.resource.data.cb is int
+          && request.resource.data.especes is int;
+      }
 
-    match /uberPayouts/{id} {
-      allow read, delete: if isGerant();
-      allow create, update: if isGerant()
-        && request.resource.data.montant is int
-        && request.resource.data.date is string;
-    }
+      match /bankTransactions/{id} {
+        allow read, delete: if gerantDe(rid);
+        allow create, update: if gerantDe(rid)
+          && request.resource.data.montant is int
+          && request.resource.data.date is string;
+      }
 
-    // Boîte de réception alimentée par le serveur (compte de service) : le gérant lit, valide ou rejette.
-    match /inbox/{id} {
-      allow read: if isGerant();
-      allow create, delete: if false;
-      allow update: if isGerant()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["statut", "traiteLe"])
-        && request.resource.data.statut in ["valide", "rejete"];
-    }
+      match /uberPayouts/{id} {
+        allow read, delete: if gerantDe(rid);
+        allow create, update: if gerantDe(rid)
+          && request.resource.data.montant is int
+          && request.resource.data.date is string;
+      }
 
-    // settings/mail est tenu par le serveur (état de la boîte mail) : lecture seule pour le gérant.
-    match /settings/{id} {
-      allow read: if isGerant();
-      allow write: if isGerant() && id != "mail";
+      // Boîte de réception alimentée par le serveur (compte de service) : le gérant lit, valide ou rejette.
+      match /inbox/{id} {
+        allow read: if gerantDe(rid);
+        allow create, delete: if false;
+        allow update: if gerantDe(rid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["statut", "traiteLe"])
+          && request.resource.data.statut in ["valide", "rejete"];
+      }
+
+      // settings/mail est tenu par le serveur (état de la boîte mail) : lecture seule pour le gérant.
+      match /settings/{id} {
+        allow read: if gerantDe(rid);
+        allow write: if gerantDe(rid) && id != "mail";
+      }
     }
 
     // Tout le reste est fermé.

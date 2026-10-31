@@ -4,6 +4,7 @@ import { addDoc, collection, deleteDoc, doc, updateDoc, writeBatch } from "fireb
 import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Sheet } from "@/components/ui";
 import { checkDpae, dpaeSheet } from "@/lib/dpae";
+import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import { readSpreadsheet, rowToEmployee, type EmployeeDraft } from "@/lib/importer";
 import type { Employee, TypeContrat, WithId } from "@/lib/types";
@@ -32,6 +33,7 @@ function clean<T extends object>(o: T): T {
 }
 
 export default function SalariesPage() {
+  const { rid } = useRestaurant();
   const { items, loading, error } = useCollection<Employee>("employees", "dateEmbauche", true);
   const [editing, setEditing] = useState<WithId<Employee> | "new" | null>(null);
   const [importRows, setImportRows] = useState<EmployeeDraft[] | null>(null);
@@ -61,7 +63,7 @@ export default function SalariesPage() {
     if (!importRows) return;
     const batch = writeBatch(db());
     for (const r of importRows) {
-      batch.set(doc(collection(db(), "employees")), clean({ ...r, dpaeStatut: "a_declarer", createdAt: Date.now() }));
+      batch.set(doc(collection(db(), "restaurants", rid, "employees")), clean({ ...r, dpaeStatut: "a_declarer", createdAt: Date.now() }));
     }
     try {
       await batch.commit();
@@ -187,13 +189,14 @@ export default function SalariesPage() {
 }
 
 function DeclareForm({ employee, onDone }: { employee: WithId<Employee>; onDone: () => void }) {
+  const { rid } = useRestaurant();
   const [numero, setNumero] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [error, setError] = useState<string | null>(null);
   async function submit(e: FormEvent) {
     e.preventDefault();
     try {
-      await updateDoc(doc(db(), "employees", employee.id), {
+      await updateDoc(doc(db(), "restaurants", rid, "employees", employee.id), {
         dpaeStatut: "declaree",
         dpaeDateDeclaration: date,
         dpaeNumeroAccuse: numero.trim(),
@@ -217,6 +220,7 @@ function DeclareForm({ employee, onDone }: { employee: WithId<Employee>; onDone:
 }
 
 function EmployeeForm({ initial, onDone }: { initial: WithId<Employee> | null; onDone: () => void }) {
+  const { rid } = useRestaurant();
   const [f, setF] = useState<EmployeeDraft>(() => {
     if (!initial) return EMPTY;
     const draft: EmployeeDraft = { ...EMPTY };
@@ -235,8 +239,8 @@ function EmployeeForm({ initial, onDone }: { initial: WithId<Employee> | null; o
     setBusy(true);
     const data = clean({ ...f, nom: f.nom.toUpperCase(), nir: f.nir.replace(/\s/g, "") });
     try {
-      if (initial) await updateDoc(doc(db(), "employees", initial.id), { ...data });
-      else await addDoc(collection(db(), "employees"), { ...data, dpaeStatut: "a_declarer", createdAt: Date.now() });
+      if (initial) await updateDoc(doc(db(), "restaurants", rid, "employees", initial.id), { ...data });
+      else await addDoc(collection(db(), "restaurants", rid, "employees"), { ...data, dpaeStatut: "a_declarer", createdAt: Date.now() });
       onDone();
     } catch (err) {
       setError((err as Error).message);
@@ -247,7 +251,7 @@ function EmployeeForm({ initial, onDone }: { initial: WithId<Employee> | null; o
 
   async function remove() {
     if (!initial || !confirm(`Supprimer ${initial.prenom} ${initial.nom} ?`)) return;
-    await deleteDoc(doc(db(), "employees", initial.id));
+    await deleteDoc(doc(db(), "restaurants", rid, "employees", initial.id));
     onDone();
   }
 

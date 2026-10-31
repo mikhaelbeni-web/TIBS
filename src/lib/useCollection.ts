@@ -2,17 +2,19 @@
 
 import { collection, onSnapshot, orderBy, query, type DocumentData } from "firebase/firestore";
 import { useEffect, useState } from "react";
+import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "./firebase";
 import type { WithId } from "./types";
 
-/** Abonnement temps réel à une collection, triée par un champ. */
+/** Abonnement temps réel à une collection du restaurant actif (restaurants/{rid}/{name}), triée par un champ. */
 export function useCollection<T extends DocumentData>(name: string, orderField: string, desc = false) {
+  const { rid } = useRestaurant();
   const [items, setItems] = useState<WithId<T>[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const q = query(collection(db(), name), orderBy(orderField, desc ? "desc" : "asc"));
+    const q = query(collection(db(), "restaurants", rid, name), orderBy(orderField, desc ? "desc" : "asc"));
     return onSnapshot(
       q,
       (snap) => {
@@ -24,7 +26,7 @@ export function useCollection<T extends DocumentData>(name: string, orderField: 
         setLoading(false);
       },
     );
-  }, [name, orderField, desc]);
+  }, [rid, name, orderField, desc]);
 
   return { items, loading, error };
 }

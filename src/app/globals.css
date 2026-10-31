@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "./tokens.css";
+/* Classes de couleur des restaurants, déclarées dans un fichier .ts */
+@source "../lib/restaurants.ts";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -14,6 +16,8 @@
   --color-ink-inverse: var(--tibs-ink-inverse);
   --color-brand: var(--tibs-brand);
   --color-brand-soft: var(--tibs-brand-soft);
+  --color-site-19: var(--tibs-site-19);
+  --color-site-17: var(--tibs-site-17);
   --color-bar: var(--tibs-bar);
   --color-primary: var(--tibs-primary);
   --color-primary-fg: var(--tibs-primary-fg);

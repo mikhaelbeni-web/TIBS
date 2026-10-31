@@ -17,6 +17,7 @@ import {
   type GmailMessage,
   type MailRules,
 } from "@/lib/mail";
+import { RESTAURANTS, type RestaurantId } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
 import { extractFacture, extractionEnabled, extractUber } from "@/lib/server/extract";
 import { getAttachment, getMessage, GoogleAuthError, listMessageIds, refreshAccessToken } from "@/lib/server/google";
@@ -130,12 +131,12 @@ async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "ube
 }
 
 /** Même fournisseur et même numéro déjà reçu (DUPLICATA, double envoi) ou déjà saisi dans Factures. */
-async function isDuplicate(db: FirebaseFirestore.Firestore, item: InboxItem): Promise<boolean> {
+async function isDuplicate(base: FirebaseFirestore.DocumentReference, item: InboxItem): Promise<boolean> {
   if (item.kind !== "facture" || !item.numero) return false;
   const nom = item.fournisseur.toLowerCase();
   const [inbox, invoices] = await Promise.all([
-    db.collection("inbox").where("item.numero", "==", item.numero).get(),
-    db.collection("invoices").where("numero", "==", item.numero).get(),
+    base.collection("inbox").where("item.numero", "==", item.numero).get(),
+    base.collection("invoices").where("numero", "==", item.numero).get(),
   ]);
   return (
     inbox.docs.some((d) => String(d.get("item.fournisseur") ?? "").toLowerCase() === nom && d.get("statut") !== "rejete") ||
@@ -143,13 +144,18 @@ async function isDuplicate(db: FirebaseFirestore.Firestore, item: InboxItem): Pr
   );
 }
 
-export async function syncMail({ budgetMs = 240_000 }: { budgetMs?: number } = {}): Promise<SyncResult> {
+/**
+ * Relève la boîte Gmail d'un restaurant. Une facture qui mentionne clairement l'autre restaurant
+ * (adresse, Prony en copie…) est déposée dans « À vérifier » de cet autre restaurant.
+ */
+export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budgetMs?: number } = {}): Promise<SyncResult> {
   const started = Date.now();
   const db = adminDb();
-  const statusRef = db.doc("settings/mail");
+  const home = db.doc(`restaurants/${rid}`);
+  const statusRef = home.collection("settings").doc("mail");
   const result: SyncResult = { status: "ok", messagesVus: 0, nouveaux: 0, ignores: 0, doublons: 0, erreurs: 0, incomplet: false };
 
-  const priv = await db.doc("private/gmail").get();
+  const priv = await home.collection("private").doc("gmail").get();
   const refreshToken = priv.get("refreshToken") as string | undefined;
   if (!refreshToken) return { ...result, status: "non_connecte", message: "Boîte Gmail non connectée." };
 
@@ -161,7 +167,7 @@ export async function syncMail({ budgetMs = 240_000 }: { budgetMs?: number } = {
 
   try {
     const token = await refreshAccessToken(refreshToken);
-    const suppliers = await db.collection("suppliers").get();
+    const suppliers = await home.collection("suppliers").get();
     const supplierByEmail = new Map(
       suppliers.docs
         .map((d) => [String(d.get("email") ?? "").trim().toLowerCase(), String(d.get("nom") ?? "")] as const)
@@ -170,7 +176,7 @@ export async function syncMail({ budgetMs = 240_000 }: { budgetMs?: number } = {
     const supplierEmails = [...supplierByEmail.keys()];
 
     const ids = (await listMessageIds(token, gmailQuery(days, rules))).reverse(); // du plus ancien au plus récent
-    const logs = await Promise.all(ids.map((id) => db.doc(`mailLog/${id}`).get()));
+    const logs = await Promise.all(ids.map((id) => home.collection("mailLog").doc(id).get()));
     const todo = ids.filter((_, i) => !logs[i].exists);
 
     for (const id of todo) {
@@ -185,20 +191,22 @@ export async function syncMail({ budgetMs = 240_000 }: { budgetMs?: number } = {
         const items = kind ? await itemsFor(token, msg, kind, { rules, supplierByEmail }) : [];
         const now = Date.now();
         for (const [n, item] of items.entries()) {
-          if (await isDuplicate(db, item)) {
+          // Pièce qui concerne clairement l'autre restaurant : elle va dans son « À vérifier ».
+          const target = item.kind === "facture" && item.etablissement && item.etablissement !== rid ? db.doc(`restaurants/${item.etablissement}`) : home;
+          if (await isDuplicate(target, item)) {
             result.doublons++;
             continue;
           }
           const doc: InboxDoc = { item, statut: "a_verifier", receivedAt: now };
           try {
-            await db.collection("inbox").doc(inboxDocId(id, n)).create(doc);
+            await target.collection("inbox").doc(inboxDocId(id, n)).create(doc);
             result.nouveaux++;
           } catch (e) {
             if ((e as { code?: number }).code !== 6) throw e; // 6 = déjà présent
           }
         }
         if (!items.length) result.ignores++;
-        await db.doc(`mailLog/${id}`).set({
+        await home.collection("mailLog").doc(id).set({
           traiteLe: now,
           type: kind ?? "ignore",
           elements: items.length,
@@ -230,4 +238,15 @@ export async function syncMail({ budgetMs = 240_000 }: { budgetMs?: number } = {
     { merge: true },
   );
   return result;
+}
+
+/** Relève les boîtes de tous les restaurants connectés, en partageant le temps disponible. */
+export async function syncAll(budgetMs: number): Promise<Record<RestaurantId, SyncResult>> {
+  const started = Date.now();
+  const out = {} as Record<RestaurantId, SyncResult>;
+  for (const [i, r] of RESTAURANTS.entries()) {
+    const left = budgetMs - (Date.now() - started);
+    out[r.id] = await syncMail(r.id, { budgetMs: Math.max(10_000, left / (RESTAURANTS.length - i)) });
+  }
+  return out;
 }

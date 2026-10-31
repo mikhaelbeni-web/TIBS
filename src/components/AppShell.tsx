@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 import { useAuth } from "./AuthProvider";
+import { useRestaurant } from "./RestaurantProvider";
+import { RestaurantSwitcher } from "./RestaurantSwitcher";
 import { Button, Card } from "./ui";
 
 // Sur téléphone, Fournisseurs est accessible depuis la page Factures (5 onglets max en bas).
@@ -26,12 +28,23 @@ function Icon({ d }: { d: string }) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { loading, user, role, error, logout } = useAuth();
+  const { rid } = useRestaurant();
   const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
   }, [loading, user, router]);
+
+  // Une fois : les données saisies avant les deux portails sont recopiées dans Manin 19e (côté serveur).
+  useEffect(() => {
+    if (!user || role !== "gerant" || sessionStorage.getItem("tibs.migre")) return;
+    user
+      .getIdToken()
+      .then((t) => fetch("/api/migrate", { method: "POST", headers: { authorization: `Bearer ${t}` } }))
+      .then((r) => r.ok && sessionStorage.setItem("tibs.migre", "1"))
+      .catch(() => {});
+  }, [user, role]);
 
   if (loading || !user) {
     return <div className="flex min-h-dvh items-center justify-center text-muted">Chargement…</div>;
@@ -60,7 +73,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="min-h-dvh bg-bg md:flex">
       {/* Barre latérale (tablette / ordinateur) */}
       <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r border-border bg-surface p-4 md:flex">
-        <div className="mb-6 font-display text-3xl tracking-wide">Le Tib&rsquo;s<span className="ml-1 inline-block size-2 rounded-full bg-brand" aria-hidden /></div>
+        <div className="mb-4 font-display text-3xl tracking-wide">Le Tib&rsquo;s<span className="ml-1 inline-block size-2 rounded-full bg-brand" aria-hidden /></div>
+        <RestaurantSwitcher className="mb-6 self-start" />
         <nav className="flex flex-1 flex-col gap-1">
           {NAV.map((n) => (
             <Link
@@ -80,10 +94,18 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* En-tête (téléphone) */}
       <header className="sticky top-0 z-30 flex items-center justify-between border-b border-border bg-surface px-4 pt-[env(safe-area-inset-top)] md:hidden">
         <div className="py-3 font-display text-2xl tracking-wide">Le Tib&rsquo;s<span className="ml-1 inline-block size-2 rounded-full bg-brand" aria-hidden /></div>
-        <Button variant="ghost" onClick={logout}>Déconnexion</Button>
+        <div className="flex items-center gap-1">
+          <RestaurantSwitcher />
+          <Button variant="ghost" className="px-2" onClick={logout} aria-label="Se déconnecter">
+            <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden>
+              <path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" />
+            </svg>
+          </Button>
+        </div>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl flex-1 p-4 pb-28 md:p-8">{children}</main>
+      {/* key : changer de restaurant remet chaque page à zéro (formulaires, filtres). */}
+      <main key={rid} className="mx-auto w-full max-w-5xl flex-1 p-4 pb-28 md:p-8">{children}</main>
 
       {/* Barre de navigation du bas (téléphone) */}
       <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 bg-bar pb-[env(safe-area-inset-bottom)] md:hidden">

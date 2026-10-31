@@ -3,6 +3,7 @@
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { Button, Card, ErrorBox, Field, Input, PageHeader, Select } from "@/components/ui";
+import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import { formatEuros } from "@/lib/money";
 import type { AppSettings, CashEntry, Invoice } from "@/lib/types";
@@ -22,6 +23,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const previousMonth = () => prochaineEcheanceTva(today()).mois;
 
 export default function TvaPage() {
+  const { rid } = useRestaurant();
   const cash = useCollection<CashEntry>("cashEntries", "date");
   const invoices = useCollection<Invoice>("invoices", "dateFacture");
   const [periode, setPeriode] = useState<Periode>("mois");
@@ -33,10 +35,10 @@ export default function TvaPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getDoc(doc(db(), "settings", "app"))
+    getDoc(doc(db(), "restaurants", rid, "settings", "app"))
       .then((s) => s.exists() && setSettings(s.data() as AppSettings))
       .catch((e) => setError(e.message));
-  }, []);
+  }, [rid]);
 
   const { from, to } = useMemo(() => {
     if (periode === "libre") return { from: libreFrom, to: libreTo };
@@ -58,7 +60,7 @@ export default function TvaPage() {
   async function marquerEnvoye() {
     const tvaEnvois = { ...(settings.tvaEnvois ?? {}), [mois]: today() };
     try {
-      await setDoc(doc(db(), "settings", "app"), { tvaEnvois }, { merge: true });
+      await setDoc(doc(db(), "restaurants", rid, "settings", "app"), { tvaEnvois }, { merge: true });
       setSettings({ ...settings, tvaEnvois });
     } catch (e) {
       setError((e as Error).message);
@@ -115,7 +117,7 @@ export default function TvaPage() {
 
   async function saveSettings() {
     try {
-      await setDoc(doc(db(), "settings", "app"), settings, { merge: true });
+      await setDoc(doc(db(), "restaurants", rid, "settings", "app"), settings, { merge: true });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {

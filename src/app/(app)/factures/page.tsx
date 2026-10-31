@@ -4,6 +4,7 @@ import { addDoc, collection, deleteDoc, doc, updateDoc } from "firebase/firestor
 import Link from "next/link";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Sheet } from "@/components/ui";
+import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import { formatEuros, toCents } from "@/lib/money";
 import type { Invoice, StatutFacture, Supplier, WithId } from "@/lib/types";
@@ -18,6 +19,7 @@ const STATUT: Record<StatutFacture, { label: string; tone: "orange" | "green" | 
 };
 
 export default function FacturesPage() {
+  const { rid } = useRestaurant();
   const { items, loading, error } = useCollection<Invoice>("invoices", "dateFacture", true);
   const suppliers = useCollection<Supplier>("suppliers", "nom");
   const [mois, setMois] = useState(thisMonth());
@@ -59,7 +61,7 @@ export default function FacturesPage() {
   }
 
   async function markPaid(i: WithId<Invoice>) {
-    await updateDoc(doc(db(), "invoices", i.id), { statut: "payee", datePaiement: new Date().toISOString().slice(0, 10) });
+    await updateDoc(doc(db(), "restaurants", rid, "invoices", i.id), { statut: "payee", datePaiement: new Date().toISOString().slice(0, 10) });
   }
 
   return (
@@ -140,6 +142,7 @@ export default function FacturesPage() {
 const euros = (c?: number) => (c === undefined ? "" : (c / 100).toFixed(2).replace(".", ","));
 
 function InvoiceForm({ initial, suppliers, onDone }: { initial: WithId<Invoice> | null; suppliers: WithId<Supplier>[]; onDone: () => void }) {
+  const { rid } = useRestaurant();
   const [f, setF] = useState({
     supplierId: initial?.supplierId ?? suppliers[0]?.id ?? "",
     numero: initial?.numero ?? "",
@@ -179,8 +182,8 @@ function InvoiceForm({ initial, suppliers, onDone }: { initial: WithId<Invoice> 
       ...(f.statut === "payee" ? { datePaiement: initial?.datePaiement ?? new Date().toISOString().slice(0, 10) } : {}),
     };
     try {
-      if (initial) await updateDoc(doc(db(), "invoices", initial.id), data);
-      else await addDoc(collection(db(), "invoices"), { ...data, createdAt: new Date().getTime() });
+      if (initial) await updateDoc(doc(db(), "restaurants", rid, "invoices", initial.id), data);
+      else await addDoc(collection(db(), "restaurants", rid, "invoices"), { ...data, createdAt: new Date().getTime() });
       onDone();
     } catch (err) {
       setError((err as Error).message);
@@ -189,7 +192,7 @@ function InvoiceForm({ initial, suppliers, onDone }: { initial: WithId<Invoice> 
 
   async function remove() {
     if (!initial || !confirm("Supprimer cette facture ?")) return;
-    await deleteDoc(doc(db(), "invoices", initial.id));
+    await deleteDoc(doc(db(), "restaurants", rid, "invoices", initial.id));
     onDone();
   }
 

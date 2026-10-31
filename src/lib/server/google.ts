@@ -2,6 +2,7 @@ import "server-only";
 import { createHmac } from "node:crypto";
 import { safeEqual } from "@/lib/ingest";
 import type { GmailMessage } from "@/lib/mail";
+import { isRestaurantId, type RestaurantId } from "@/lib/restaurants";
 
 /**
  * Connexion OAuth Google et appels à l'API Gmail, en lecture seule.
@@ -23,27 +24,27 @@ export function appOrigin(request: Request): string {
 
 export const redirectUri = (request: Request) => `${appOrigin(request)}/api/gmail/callback`;
 
-/** « state » OAuth signé : identifie le gérant qui lance la connexion, valable 10 minutes. */
-export function signState(uid: string, now = Date.now()): string {
-  const payload = Buffer.from(JSON.stringify({ uid, exp: now + 10 * 60_000 })).toString("base64url");
+/** « state » OAuth signé : identifie le gérant et le restaurant concernés, valable 10 minutes. */
+export function signState(uid: string, rid: RestaurantId, now = Date.now()): string {
+  const payload = Buffer.from(JSON.stringify({ uid, rid, exp: now + 10 * 60_000 })).toString("base64url");
   const sig = createHmac("sha256", creds().secret).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
 
-export function verifyState(state: string, now = Date.now()): string | null {
+export function verifyState(state: string, now = Date.now()): { uid: string; rid: RestaurantId } | null {
   const [payload, sig] = state.split(".");
   if (!payload || !sig) return null;
   const expected = createHmac("sha256", creds().secret).update(payload).digest("base64url");
   if (!safeEqual(sig, expected)) return null;
   try {
-    const { uid, exp } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return typeof uid === "string" && typeof exp === "number" && exp > now ? uid : null;
+    const { uid, rid, exp } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return typeof uid === "string" && isRestaurantId(rid) && typeof exp === "number" && exp > now ? { uid, rid } : null;
   } catch {
     return null;
   }
 }
 
-export function authUrl(request: Request, state: string): string {
+export function authUrl(request: Request, state: string, loginHint?: string): string {
   const u = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   u.searchParams.set("client_id", creds().id);
   u.searchParams.set("redirect_uri", redirectUri(request));
@@ -53,7 +54,7 @@ export function authUrl(request: Request, state: string): string {
   u.searchParams.set("prompt", "consent");
   u.searchParams.set("include_granted_scopes", "true");
   u.searchParams.set("state", state);
-  if (process.env.MAIL_ADDRESS) u.searchParams.set("login_hint", process.env.MAIL_ADDRESS);
+  if (loginHint) u.searchParams.set("login_hint", loginHint);
   return u.toString();
 }
 

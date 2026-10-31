@@ -72,27 +72,35 @@ run("syncMail (émulateur)", () => {
     const { adminDb } = await import("../admin");
     const { syncMail } = await import("../mailSync");
     const db = adminDb();
-    for (const c of ["inbox", "mailLog"]) for (const d of (await db.collection(c).get()).docs) await d.ref.delete();
-    await db.doc("settings/mail").delete();
-    await db.doc("private/gmail").delete();
+    for (const rid of ["19e", "17e"]) {
+      for (const c of ["inbox", "mailLog"]) for (const d of (await db.collection(`restaurants/${rid}/${c}`).get()).docs) await d.ref.delete();
+      await db.doc(`restaurants/${rid}/settings/mail`).delete();
+      await db.doc(`restaurants/${rid}/private/gmail`).delete();
+    }
+    const docs = async (rid: string) =>
+      (await db.collection(`restaurants/${rid}/inbox`).get()).docs.map((d) => ({ id: d.id, ...d.data() }) as { id: string; item: Record<string, unknown> });
 
-    expect((await syncMail()).status).toBe("non_connecte");
+    expect((await syncMail("19e")).status).toBe("non_connecte");
 
-    await db.doc("private/gmail").set({ refreshToken: "rt", adresse: "resto@gmail.com" });
-    const r = await syncMail();
+    await db.doc("restaurants/19e/private/gmail").set({ refreshToken: "rt", adresse: "ava01012018@gmail.com" });
+    const r = await syncMail("19e");
     expect(r).toMatchObject({ status: "ok", messagesVus: 5, nouveaux: 3, doublons: 1, erreurs: 0 });
 
-    const inbox = (await db.collection("inbox").get()).docs.map((d) => ({ id: d.id, ...d.data() }) as { id: string; item: Record<string, unknown> });
+    const inbox = await docs("19e");
     const hps = inbox.find((d) => d.id === "m1_0")!.item;
     expect(hps).toMatchObject({ kind: "facture", fournisseur: "Halles Paris Sud", numero: "FAC-20261009-004512", dateFacture: "2026-10-09", incomplet: true });
     expect(hps.source).toMatchObject({ messageId: "m1", attachment: "FAC-20261009-004512.pdf" });
     expect(inbox.find((d) => d.id === "m2_0")!.item).toMatchObject({ kind: "uber", date: "2026-10-15", montant: 478133, frais: 184069, brut: 780650 });
     expect(inbox.find((d) => d.id === "m2_0")!.item.incomplet).toBeUndefined();
-    expect(inbox.find((d) => d.id === "m5_0")!.item).toMatchObject({ fournisseur: "IMS Cash", montantTTC: 5800, etablissement: "17e", incomplet: true });
     expect(inbox.some((d) => d.id === "m4_0")).toBe(false);
+    // Facture Pennylane avec Prony en copie : déposée dans le portail du 17e.
+    expect(inbox.some((d) => d.id === "m5_0")).toBe(false);
+    expect((await docs("17e")).find((d) => d.id === "m5_0")!.item).toMatchObject({ fournisseur: "IMS Cash", montantTTC: 5800, etablissement: "17e" });
 
-    const again = await syncMail();
+    const again = await syncMail("19e");
     expect(again).toMatchObject({ messagesVus: 0, nouveaux: 0 });
-    expect((await db.doc("settings/mail").get()).get("dernierResultat.nouveaux")).toBe(0);
+    expect((await db.doc("restaurants/19e/settings/mail").get()).get("dernierResultat.nouveaux")).toBe(0);
+    // Le 17e n'a pas de boîte connectée.
+    expect((await syncMail("17e")).status).toBe("non_connecte");
   });
 });
