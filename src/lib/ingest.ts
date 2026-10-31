@@ -28,6 +28,7 @@ export interface InboxFacture {
   montantHT?: number; // centimes
   montantTVA?: number;
   montantTTC?: number;
+  etablissement?: "19e" | "17e";
   incomplet?: boolean;
   source: InboxSource;
 }
