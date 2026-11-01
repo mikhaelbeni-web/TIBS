@@ -225,7 +225,9 @@ export function classify(msg: GmailMessage, rules: MailRules, supplierEmails: st
   const pdfs = pdfAttachments(msg);
   const known = knownSupplier(from, rules.fournisseurs) !== null || senderMatches(from, supplierEmails.map((e) => e.toLowerCase()));
   if (known) {
-    if (hasKeyword(subject, rules.factureExclure)) return null;
+    // Un relevé mensuel d'un fournisseur connu avec PDF est lu par l'IA (rapprochement relevé ↔ factures).
+    const exclure = pdfs.length ? rules.factureExclure.filter((k) => !/^relev[eé]s?$/.test(k)) : rules.factureExclure;
+    if (hasKeyword(subject, exclure)) return null;
     if (pdfs.length) return "facture";
     const t = parseFactureText(subject, bodyText(msg));
     return t.montantTTC !== undefined ? "facture" : null;
