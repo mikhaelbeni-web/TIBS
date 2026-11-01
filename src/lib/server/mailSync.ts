@@ -8,6 +8,7 @@ import {
   emailOf,
   etablissementOf,
   gmailQuery,
+  type Periode,
   header,
   knownSupplier,
   mergeRules,
@@ -253,7 +254,10 @@ export async function jetonBoite(rid: RestaurantId, cache = new Map<RestaurantId
  * Relève la boîte Gmail d'un restaurant. Une facture qui mentionne clairement l'autre restaurant
  * (adresse, Prony en copie…) est déposée dans « À vérifier » de cet autre restaurant.
  */
-export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budgetMs?: number } = {}): Promise<SyncResult> {
+export async function syncMail(
+  rid: RestaurantId,
+  { budgetMs = 240_000, periode = null }: { budgetMs?: number; periode?: Periode | null } = {},
+): Promise<SyncResult> {
   const started = Date.now();
   const db = adminDb();
   const home = db.doc(`restaurants/${rid}`);
@@ -282,9 +286,11 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
     );
     const supplierEmails = [...supplierByEmail.keys()];
 
-    const ids = (await listMessageIds(token, gmailQuery(days, rules))).reverse(); // du plus ancien au plus récent
+    const ids = (await listMessageIds(token, gmailQuery(days, rules, periode))).reverse(); // du plus ancien au plus récent
     const logs = await Promise.all(ids.map((id) => home.collection("mailLog").doc(id).get()));
-    const todo = ids.filter((_, i) => !logs[i].exists);
+    // Recherche sur une période : on réexamine aussi les mails écartés (règles de tri changées depuis).
+    // Ceux qui ont déjà donné un élément ne sont pas repris (pas de doublon dans « À vérifier »).
+    const todo = ids.filter((_, i) => !logs[i].exists || (periode && logs[i].get("type") === "ignore"));
 
     for (const id of todo) {
       if (Date.now() - started > budgetMs) {
@@ -348,7 +354,8 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
   await statusRef.set(
     {
       // Passage interrompu (temps écoulé) : on garde l'ancienne date pour que la fenêtre de recherche couvre la suite.
-      ...(result.incomplet ? {} : { dernierPassage: started }),
+      // Recherche sur une période choisie : ne décale pas le relevé automatique.
+      ...(result.incomplet || periode ? {} : { dernierPassage: started }),
       dernierEssai: started,
       dernierResultat: { ...result, duree: Date.now() - started, lecturePdf: lecteur.actif },
       erreur: FieldValue.delete(),
