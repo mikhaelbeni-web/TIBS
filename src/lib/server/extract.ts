@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { toIsoDate } from "@/lib/money";
+import { coutUsd, MODELES, type Reglages } from "@/lib/reglages";
 
 /**
  * Lecture des PDF et des mails par l'API Claude (facultatif) : sans ANTHROPIC_API_KEY,
@@ -10,7 +11,49 @@ import { toIsoDate } from "@/lib/money";
  */
 export const extractionEnabled = () => Boolean(process.env.ANTHROPIC_API_KEY);
 
-const MODEL = "claude-opus-5-5";
+/**
+ * Compteur d'une vérification : applique les limites des Réglages (lecture activée, nombre max
+ * de PDF, budget du mois) et additionne la dépense réelle renvoyée par l'API.
+ */
+export class Lecteur {
+  lectures = 0;
+  entree = 0;
+  sortie = 0;
+  cout = 0;
+  /** Pourquoi une lecture a été refusée (affiché au gérant). */
+  limite: "max" | "budget" | null = null;
+
+  constructor(
+    readonly reglages: Reglages,
+    private readonly depenseMoisUsd = 0,
+  ) {}
+
+  get actif() {
+    return extractionEnabled() && this.reglages.lecturePdf;
+  }
+
+  peutLire(): boolean {
+    if (!this.actif) return false;
+    if (this.lectures >= this.reglages.maxLecturesParVerification) {
+      this.limite ??= "max";
+      return false;
+    }
+    if (this.reglages.budgetMensuelUsd > 0 && this.depenseMoisUsd + this.cout >= this.reglages.budgetMensuelUsd) {
+      this.limite ??= "budget";
+      return false;
+    }
+    return true;
+  }
+
+  compter(u: { input_tokens?: number | null; output_tokens?: number | null; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null }) {
+    const entree = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    const sortie = u.output_tokens ?? 0;
+    this.lectures++;
+    this.entree += entree;
+    this.sortie += sortie;
+    this.cout += coutUsd(this.reglages.modele, entree, sortie);
+  }
+}
 
 const FactureSchema = z.object({
   est_facture: z.boolean().describe("true si le document est une facture ou un avoir adressé au restaurant"),
@@ -63,16 +106,18 @@ const SYSTEM =
   "Recopie les valeurs telles qu'elles figurent sur le document, sans rien inventer : laisse vide (ou null) ce qui n'y est pas. " +
   "Montants en euros avec le point comme séparateur décimal.";
 
-async function ask<S extends z.ZodType>(schema: S, content: Anthropic.Beta.BetaContentBlockParam[]): Promise<z.infer<S> | null> {
+async function ask<S extends z.ZodType>(lecteur: Lecteur, schema: S, content: Anthropic.Beta.BetaContentBlockParam[]): Promise<z.infer<S> | null> {
+  const modele = lecteur.reglages.modele;
   const res = await anthropic().beta.messages.parse({
-    model: MODEL,
+    model: MODELES[modele].id,
     max_tokens: 8000,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
+    // Repli automatique en cas de refus (Haiku n'en a pas côté serveur).
+    ...(modele === "haiku" ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }),
     system: SYSTEM,
     output_config: { effort: "low", format: betaZodOutputFormat(schema) },
     messages: [{ role: "user", content }],
   });
+  lecteur.compter(res.usage);
   if (res.stop_reason === "refusal" || res.stop_reason === "max_tokens") return null;
   return (res.parsed_output as z.infer<S> | null) ?? null;
 }
@@ -84,8 +129,9 @@ const contextLine = (c: { from: string; subject: string; filename?: string }) =>
 export async function extractFacture(
   pdfBase64: string,
   ctx: { from: string; subject: string; filename: string },
+  lecteur: Lecteur,
 ): Promise<ExtractedFacture | null> {
-  const r = await ask(FactureSchema, [
+  const r = await ask(lecteur, FactureSchema, [
     { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } },
     { type: "text", text: `${contextLine(ctx)}\n\nCe document est-il une facture fournisseur ? Si oui, relève ses informations.` },
   ]);
@@ -111,6 +157,7 @@ export async function extractUber(
   text: string,
   pdfBase64: string | undefined,
   ctx: { from: string; subject: string; receivedAt: string },
+  lecteur: Lecteur,
 ): Promise<ExtractedUber | null> {
   const content: Anthropic.Beta.BetaContentBlockParam[] = [];
   if (pdfBase64) content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } });
@@ -118,7 +165,7 @@ export async function extractUber(
     type: "text",
     text: `${contextLine(ctx)}\nReçu le : ${ctx.receivedAt}\n\nCorps du mail :\n${text}\n\nCe message annonce-t-il un versement d'Uber Eats au restaurant ? Si oui, relève-le.`,
   });
-  const r = await ask(UberSchema, content);
+  const r = await ask(lecteur, UberSchema, content);
   if (!r || !r.est_versement) return null;
   return clean({
     date: iso(r.date_versement),

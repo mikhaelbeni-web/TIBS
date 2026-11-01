@@ -7,6 +7,16 @@ vi.mock("../extract", () => ({
   extractionEnabled: () => true,
   extractFacture: vi.fn(async () => ({ fournisseur: "HALLES PARIS SUD SAS", numero: "FAC-1", dateFacture: "2026-10-09", montantHT: 10000, montantTVA: 550, montantTTC: 10550 })),
   extractUber: vi.fn(async () => null),
+  Lecteur: class {
+    actif = true;
+    lectures = 0;
+    entree = 0;
+    sortie = 0;
+    cout = 0;
+    limite = null;
+    peutLire = () => true;
+    compter() {}
+  },
 }));
 
 const msg = {

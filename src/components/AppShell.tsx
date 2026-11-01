@@ -16,6 +16,7 @@ const NAV: { href: string; label: string; icon: string; mobile?: boolean }[] = [
   { href: "/factures", label: "Factures", icon: "M6 2h9l5 5v15H6zM14 2v6h6M9 13h8M9 17h8" },
   { href: "/rapprochement", label: "Caisse", icon: "M3 6h18v12H3zM3 10h18M7 15h3" },
   { href: "/tva", label: "TVA", icon: "M19 5L5 19M7 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm10 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" },
+  { href: "/reglages", label: "Réglages", mobile: false, icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" },
 ];
 
 function Icon({ d }: { d: string }) {
@@ -67,7 +68,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   const isActive = (href: string) =>
-    href === "/" ? pathname === "/" : pathname.startsWith(href) || (href === "/factures" && pathname.startsWith("/fournisseurs"));
+    href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
 
   return (
     <div className="min-h-dvh bg-bg md:flex">
@@ -96,6 +97,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="py-3 font-display text-2xl tracking-wide">Le Tib&rsquo;s<span className="ml-1 inline-block size-2 rounded-full bg-brand" aria-hidden /></div>
         <div className="flex items-center gap-1">
           <RestaurantSwitcher />
+          <Link href="/reglages" aria-label="Réglages" className={`flex size-11 items-center justify-center rounded-control ${isActive("/reglages") ? "bg-surface-2" : ""}`}>
+            <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+            </svg>
+          </Link>
           <Button variant="ghost" className="px-2" onClick={logout} aria-label="Se déconnecter">
             <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden>
               <path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" />
@@ -113,7 +119,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Link
             key={n.href}
             href={n.href}
-            className={`relative flex min-h-16 flex-col items-center justify-center gap-0.5 text-caption font-medium ${isActive(n.href) ? "text-white before:absolute before:inset-x-4 before:top-0 before:h-[3px] before:rounded-b before:bg-brand" : "text-white/60"}`}
+            className={`relative flex min-h-16 flex-col items-center justify-center gap-0.5 text-caption font-medium ${isActive(n.href) || (n.href === "/factures" && isActive("/fournisseurs")) ? "text-white before:absolute before:inset-x-4 before:top-0 before:h-[3px] before:rounded-b before:bg-brand" : "text-white/60"}`}
           >
             <Icon d={n.icon} />
             {n.label}
