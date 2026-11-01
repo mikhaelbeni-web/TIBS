@@ -89,6 +89,9 @@ function MailCard() {
             ? `${r.messagesVus} mail(s) lu(s), ${r.nouveaux} élément(s) ajouté(s).${r.incomplet ? " Il en reste : relance pour continuer." : ""}`
             : r.message,
         );
+        if (r.relu?.status === "ok" && r.relu.relus) {
+          setInfo((i) => `${i ?? ""} PDF relus : ${r.relu.relus}, dont ${r.relu.completes} complété(s).${r.relu.restants ? ` Encore ${r.relu.restants} à compléter.` : ""}`.trim());
+        }
       }
     } catch (e) {
       setError((e as Error).message);

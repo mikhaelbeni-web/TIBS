@@ -1,0 +1,54 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+/** Relecture des PDF « à compléter » (émulateur Firestore, Google et Claude simulés). */
+const run = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
+
+vi.mock("../extract", () => ({
+  extractionEnabled: () => true,
+  extractFacture: vi.fn(async () => ({ fournisseur: "HALLES PARIS SUD SAS", numero: "FAC-1", dateFacture: "2026-10-09", montantHT: 10000, montantTVA: 550, montantTTC: 10550 })),
+  extractUber: vi.fn(async () => null),
+}));
+
+const msg = {
+  id: "r1",
+  internalDate: String(Date.UTC(2026, 9, 10)),
+  payload: {
+    headers: [{ name: "From", value: "HPS <comptabilite@hpsrungis.com>" }, { name: "Subject", value: "Facture" }],
+    parts: [{ mimeType: "application/pdf", filename: "FAC-1.pdf", body: { attachmentId: "a1", size: 2000 } }],
+  },
+};
+
+beforeAll(() => {
+  process.env.GOOGLE_CLIENT_ID = "id";
+  process.env.GOOGLE_CLIENT_SECRET = "secret";
+  const real = globalThis.fetch;
+  vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    if (url.startsWith("https://oauth2.googleapis.com/token")) return json({ access_token: "at" });
+    if (url.includes("/messages/r1/attachments/a1")) return json({ data: Buffer.from("%PDF").toString("base64url") });
+    if (url.includes("/messages/r1?format=full")) return json(msg);
+    return real(input, init);
+  });
+});
+afterAll(() => vi.unstubAllGlobals());
+
+run("relireIncomplets (émulateur)", () => {
+  it("complète une facture sans écraser ce qui est saisi", async () => {
+    const { adminDb } = await import("../admin");
+    const { relireIncomplets } = await import("../mailSync");
+    const db = adminDb();
+    for (const d of (await db.collection("restaurants/19e/inbox").get()).docs) await d.ref.delete();
+    await db.doc("restaurants/19e/private/gmail").set({ refreshToken: "rt" });
+    await db.doc("restaurants/19e/inbox/r1_0").set({
+      statut: "a_verifier",
+      receivedAt: 1,
+      item: { kind: "facture", fournisseur: "Halles Paris Sud", numero: "FAC-1", incomplet: true, source: { messageId: "r1", attachment: "FAC-1.pdf" } },
+    });
+    const r = await relireIncomplets("19e");
+    expect(r).toMatchObject({ status: "ok", relus: 1, completes: 1, restants: 0 });
+    const item = (await db.doc("restaurants/19e/inbox/r1_0").get()).get("item");
+    expect(item).toMatchObject({ fournisseur: "Halles Paris Sud", numero: "FAC-1", dateFacture: "2026-10-09", montantTTC: 10550, montantTVA: 550 });
+    expect(item.incomplet).toBeUndefined();
+  });
+});
