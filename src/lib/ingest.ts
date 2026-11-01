@@ -57,7 +57,7 @@ export type InboxItem = InboxFacture | InboxUber;
 
 export interface InboxDoc {
   item: InboxItem;
-  statut: "a_verifier" | "valide" | "rejete";
+  statut: "a_verifier" | "valide" | "rejete" | "releve"; // releve : récapitulatif rangé dans les relevés fournisseurs
   receivedAt: number;
   traiteLe?: number;
   relu?: number; // dernière relecture du PDF par l'IA

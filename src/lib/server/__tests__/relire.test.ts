@@ -7,6 +7,7 @@ vi.mock("../extract", () => ({
   extractionEnabled: () => true,
   extractFacture: vi.fn(async () => ({ fournisseur: "HALLES PARIS SUD SAS", numero: "FAC-1", dateFacture: "2026-10-09", montantHT: 10000, montantTVA: 550, montantTTC: 10550 })),
   extractUber: vi.fn(async () => null),
+  estReleve: (r: { kind?: string }) => r?.kind === "releve",
   Lecteur: class {
     actif = true;
     lectures = 0;
@@ -80,5 +81,31 @@ run("relireIncomplets (émulateur)", () => {
     expect(await relireIncomplets("19e")).toMatchObject({ relus: 0, restants: 0 });
     expect(await relireIncomplets("19e", { ids: ["r1_0"] })).toMatchObject({ relus: 1, completes: 1 });
     expect((await ref.get()).get("item.lecture")).toBeUndefined();
+  });
+
+  it("un récapitulatif devient un relevé et sort de « À vérifier »", async () => {
+    const { adminDb } = await import("../admin");
+    const { relireIncomplets } = await import("../mailSync");
+    const { extractFacture } = await import("../extract");
+    const db = adminDb();
+    for (const d of (await db.collection("restaurants/19e/releves").get()).docs) await d.ref.delete();
+    const ref = db.doc("restaurants/19e/inbox/r1_0");
+    await ref.set({ statut: "a_verifier", receivedAt: 1, item: { kind: "facture", fournisseur: "PREMIUM DISTRIB", incomplet: true, source: { messageId: "r1", attachment: "FAC-1.pdf" } } });
+    vi.mocked(extractFacture).mockResolvedValueOnce({
+      kind: "releve",
+      numero: "R-10",
+      periodeDebut: "2026-10-01",
+      periodeFin: "2026-10-31",
+      totalTTC: 30000,
+      lignes: [
+        { numero: "F1", montantTTC: 10000 },
+        { numero: "F2", montantTTC: 20000 },
+      ],
+    } as never);
+    await relireIncomplets("19e");
+    expect((await ref.get()).get("statut")).toBe("releve");
+    const rel = (await db.collection("restaurants/19e/releves").get()).docs;
+    expect(rel).toHaveLength(1);
+    expect(rel[0].data()).toMatchObject({ fournisseur: "PREMIUM DISTRIB", mois: "2026-10", coherent: true, totalTTC: 30000 });
   });
 });

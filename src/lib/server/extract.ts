@@ -62,19 +62,33 @@ export class Lecteur {
 }
 
 const FactureSchema = z.object({
-  est_facture: z
-    .boolean()
+  type_document: z
+    .enum(["facture", "avoir", "releve", "autre"])
     .describe(
-      "true si le document est une facture, un avoir, ou un relevé / récapitulatif mensuel de factures à payer adressé au restaurant (pour un récapitulatif : numéro et date du relevé, totaux à payer)",
+      "facture ou avoir : une seule pièce comptable. releve : relevé de compte / récapitulatif / relevé de factures qui LISTE plusieurs factures du fournisseur (ce n'est pas une facture). autre : bon de livraison, CGV, devis, relance, publicité…",
     ),
-  avoir: z.boolean().describe("true si c'est un avoir (note de crédit)"),
-  fournisseur: z.string().describe("raison sociale du fournisseur qui émet la facture"),
-  numero: z.string().describe("numéro de facture, chaîne vide si absent"),
-  date_facture: z.string().describe("date de la facture au format AAAA-MM-JJ, chaîne vide si absente"),
+  fournisseur: z.string().describe("raison sociale du fournisseur qui émet le document"),
+  numero: z.string().describe("numéro de la facture, de l'avoir ou du relevé, chaîne vide si absent"),
+  date_facture: z.string().describe("date du document au format AAAA-MM-JJ, chaîne vide si absente"),
   date_echeance: z.string().describe("date d'échéance AAAA-MM-JJ, chaîne vide si absente"),
-  montant_ht: z.number().nullable().describe("total hors taxes en euros"),
-  montant_tva: z.number().nullable().describe("total de TVA en euros"),
-  montant_ttc: z.number().nullable().describe("total TTC / net à payer en euros"),
+  montant_ht: z.number().nullable().describe("facture/avoir : total hors taxes en euros"),
+  montant_tva: z.number().nullable().describe("facture/avoir : total de TVA en euros"),
+  montant_ttc: z.number().nullable().describe("facture/avoir : total TTC / net à payer. relevé : total des factures et avoirs de la période (hors solde antérieur)"),
+  net_a_payer: z.number().nullable().describe("relevé : net / solde à payer indiqué (peut inclure le solde antérieur et déduire les règlements), null si absent"),
+  compte_client: z.string().describe("relevé : n° de compte client ou adresse de livraison, chaîne vide si absent"),
+  periode_debut: z.string().describe("relevé : premier jour de la période AAAA-MM-JJ, sinon chaîne vide"),
+  periode_fin: z.string().describe("relevé : dernier jour de la période AAAA-MM-JJ, sinon chaîne vide"),
+  solde_anterieur: z.number().nullable().describe("relevé : solde reporté d'avant la période en euros, null si absent"),
+  lignes: z
+    .array(
+      z.object({
+        numero: z.string().describe("numéro de la facture ou de l'avoir listé"),
+        date: z.string().describe("date AAAA-MM-JJ, chaîne vide si absente"),
+        montant_ttc: z.number().nullable().describe("montant TTC en euros, tel qu'écrit (valeur positive)"),
+        avoir: z.boolean().describe("true si la ligne est un avoir / note de crédit"),
+      }),
+    )
+    .describe("relevé : chaque facture et avoir listé, dans l'ordre. Facture seule : liste vide."),
 });
 
 const UberSchema = z.object({
@@ -94,6 +108,27 @@ export interface ExtractedFacture {
   montantHT?: number;
   montantTVA?: number;
   montantTTC?: number;
+}
+
+export interface ReleveLigne {
+  numero: string;
+  date?: string;
+  montantTTC: number; // centimes, négatif pour un avoir
+}
+
+/** Relevé / récapitulatif mensuel d'un fournisseur : document de contrôle, pas une facture. */
+export interface ExtractedReleve {
+  kind: "releve";
+  fournisseur?: string;
+  numero?: string;
+  dateReleve?: string;
+  periodeDebut?: string;
+  periodeFin?: string;
+  totalTTC?: number;
+  soldeAnterieur?: number;
+  netAPayer?: number;
+  compteClient?: string;
+  lignes: ReleveLigne[];
 }
 
 export interface ExtractedUber {
@@ -135,18 +170,43 @@ async function ask<S extends z.ZodType>(lecteur: Lecteur, schema: S, content: An
 const contextLine = (c: { from: string; subject: string; filename?: string }) =>
   `Mail de : ${c.from}\nObjet : ${c.subject}${c.filename ? `\nPièce jointe : ${c.filename}` : ""}`;
 
-/** null si le PDF n'est pas une facture. Les montants d'un avoir sont rendus négatifs. */
+/**
+ * Facture ou avoir (montants d'un avoir rendus négatifs), relevé de factures (kind « releve »),
+ * ou null si le PDF n'est ni l'un ni l'autre (bon de livraison, CGV…).
+ */
 export async function extractFacture(
   pdfBase64: string,
   ctx: { from: string; subject: string; filename: string },
   lecteur: Lecteur,
-): Promise<ExtractedFacture | null> {
+): Promise<ExtractedFacture | ExtractedReleve | null> {
   const r = await ask(lecteur, FactureSchema, [
     { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } },
-    { type: "text", text: `${contextLine(ctx)}\n\nCe document est-il une facture fournisseur ? Si oui, relève ses informations.` },
+    { type: "text", text: `${contextLine(ctx)}\n\nDe quel document s'agit-il ? Relève ses informations.` },
   ]);
-  if (!r || !r.est_facture) return null;
-  const sign = r.avoir ? -1 : 1;
+  if (!r || r.type_document === "autre") return null;
+  if (r.type_document === "releve") {
+    const lignes = r.lignes
+      .map((l) => {
+        const c = cents(l.montant_ttc === null ? null : Math.abs(l.montant_ttc));
+        return c === undefined || !l.numero.trim() ? null : { numero: l.numero.trim().slice(0, 60), ...(iso(l.date) ? { date: iso(l.date) } : {}), montantTTC: l.avoir ? -c : c };
+      })
+      .filter((l): l is ReleveLigne => l !== null)
+      .slice(0, 300);
+    return clean({
+      kind: "releve" as const,
+      fournisseur: r.fournisseur.trim(),
+      numero: r.numero.trim(),
+      dateReleve: iso(r.date_facture),
+      periodeDebut: iso(r.periode_debut),
+      periodeFin: iso(r.periode_fin),
+      totalTTC: cents(r.montant_ttc),
+      soldeAnterieur: cents(r.solde_anterieur),
+      netAPayer: cents(r.net_a_payer),
+      compteClient: r.compte_client.trim().slice(0, 200),
+      lignes,
+    });
+  }
+  const sign = r.type_document === "avoir" ? -1 : 1;
   const signed = (v: number | null) => {
     const c = cents(v === null ? null : Math.abs(v));
     return c === undefined ? undefined : sign * c;
@@ -185,3 +245,5 @@ export async function extractUber(
     reference: r.reference.trim(),
   });
 }
+
+export const estReleve = (r: ExtractedFacture | ExtractedReleve): r is ExtractedReleve => (r as ExtractedReleve).kind === "releve";
