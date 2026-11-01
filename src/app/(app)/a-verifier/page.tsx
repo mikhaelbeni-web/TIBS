@@ -445,6 +445,56 @@ function amountOf(item: InboxItem) {
   return v === undefined ? "?" : formatEuros(v);
 }
 
+/** Éléments ignorés : on peut les remettre dans « À vérifier » en cas d'erreur. */
+function Ignores({ items, mailbox }: { items: (InboxDoc & { id: string })[]; mailbox?: string }) {
+  const { rid } = useRestaurant();
+  const { user } = useAuth();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (!items.length) return null;
+
+  async function restaurer(id: string) {
+    if (!user) return;
+    setBusy(id);
+    setError(null);
+    try {
+      await api(user, `/api/inbox/restaurer?r=${rid}&i=${encodeURIComponent(id)}`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const tries = [...items].sort((a, b) => (b.traiteLe ?? 0) - (a.traiteLe ?? 0)).slice(0, 50);
+  return (
+    <details className="mt-6">
+      <summary className="flex min-h-11 cursor-pointer items-center text-sm font-semibold">Ignorés ({items.length}) · ignorés par erreur ? Remets-les à vérifier</summary>
+      <ErrorBox message={error} />
+      <ul className="mt-2 space-y-2">
+        {tries.map((d) => (
+          <li key={d.id}>
+            <Card className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate font-semibold">{d.item.kind === "facture" ? d.item.fournisseur : "Versement Uber Eats"}</div>
+                <div className="truncate text-xs text-muted">
+                  Reçu le {fr(jourRecu(d)) || "?"} · {d.item.source.subject}
+                </div>
+                <div className="text-xs text-muted">{amountOf(d.item)}{d.traiteLe ? ` · ignoré le ${new Date(d.traiteLe).toLocaleDateString("fr-FR")}` : ""}</div>
+                <Boite boite={d.item.source.boite} adresse={d.item.source.boite === rid ? mailbox : undefined} className="mt-1" />
+              </div>
+              <Button variant="secondary" className="shrink-0 px-3 text-sm" disabled={busy !== null} onClick={() => restaurer(d.id)}>
+                {busy === d.id ? "…" : "Remettre à vérifier"}
+              </Button>
+            </Card>
+          </li>
+        ))}
+      </ul>
+      {items.length > tries.length && <p className="mt-2 text-xs text-muted">Seuls les 50 derniers ignorés sont affichés.</p>}
+    </details>
+  );
+}
+
 /** Éléments reçus par mail (factures fournisseurs, versements Uber) en attente de validation. */
 function AVerifier() {
   const { rid } = useRestaurant();
@@ -464,6 +514,7 @@ function AVerifier() {
   );
   const jours = todo.map(jourRecu).filter(Boolean).sort();
   const horsPeriode = enAttente.length - todo.length;
+  const ignores = useMemo(() => inbox.items.filter((i) => i.statut === "rejete"), [inbox.items]);
   const current = todo.find((i) => i.id === open);
   const close = useCallback(() => setOpen(null), []);
 
@@ -520,6 +571,7 @@ function AVerifier() {
           ))}
         </ul>
       )}
+      <Ignores items={ignores} mailbox={mailbox} />
       {current && <ReviewSheet key={`${current.id}-${current.relu ?? 0}`} id={current.id} d={current} mailbox={mailbox} onClose={close} />}
     </div>
   );
