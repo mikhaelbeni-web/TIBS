@@ -17,9 +17,10 @@ import {
   type GmailMessage,
   type MailRules,
 } from "@/lib/mail";
-import { RESTAURANTS, type RestaurantId } from "@/lib/restaurants";
+import type { RestaurantId } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
-import { extractFacture, extractionEnabled, extractUber } from "@/lib/server/extract";
+import { moisCle, parseConsommation, parseReglages } from "@/lib/reglages";
+import { extractFacture, extractUber, Lecteur } from "@/lib/server/extract";
 import { getAttachment, getMessage, GoogleAuthError, listMessageIds, refreshAccessToken } from "@/lib/server/google";
 
 /**
@@ -38,6 +39,9 @@ export interface SyncResult {
   doublons: number; // factures déjà reçues ou saisies (même fournisseur, même numéro)
   erreurs: number;
   incomplet: boolean; // vrai si le temps imparti a été atteint : la suite au prochain passage
+  lectures?: number; // PDF lus par Claude
+  coutUsd?: number;
+  limite?: "max" | "budget" | null; // lecture arrêtée par une limite des Réglages
   message?: string;
 }
 
@@ -67,6 +71,33 @@ const parisDate = (iso: string) => new Date(iso).toLocaleDateString("sv-SE", { t
 interface Ctx {
   rules: MailRules;
   supplierByEmail: Map<string, string>;
+  lecteur: Lecteur;
+}
+
+/** Ajoute la dépense de la vérification au compteur du mois (settings/mail.consommation.AAAA-MM). */
+async function enregistrerConsommation(statusRef: FirebaseFirestore.DocumentReference, l: Lecteur) {
+  if (!l.lectures) return;
+  const m = moisCle();
+  await statusRef.set(
+    {
+      consommation: {
+        [m]: {
+          lectures: FieldValue.increment(l.lectures),
+          entree: FieldValue.increment(l.entree),
+          sortie: FieldValue.increment(l.sortie),
+          coutUsd: FieldValue.increment(Math.round(l.cout * 10_000) / 10_000),
+        },
+      },
+    },
+    { merge: true },
+  );
+}
+
+/** Compteur de lecture pour un restaurant, d'après ses réglages et sa dépense du mois. */
+function lecteurPour(status: FirebaseFirestore.DocumentData) {
+  const reglages = parseReglages(status.reglages);
+  const depense = parseConsommation(status.consommation?.[moisCle()]).coutUsd;
+  return new Lecteur(reglages, depense);
 }
 
 async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "uber", ctx: Ctx): Promise<InboxItem[]> {
@@ -74,7 +105,6 @@ async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "ube
   const subject = header(msg, "Subject");
   const body = bodyText(msg);
   const pdfs = pdfAttachments(msg).filter((p) => p.size <= MAX_PDF_BYTES).slice(0, MAX_PDF_PER_MAIL);
-  const ai = extractionEnabled();
 
   if (kind === "uber") {
     const receivedAt = sourceOf(msg).receivedAt ?? "";
@@ -92,9 +122,9 @@ async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "ube
       };
       return [{ ...item, ...(item.date ? {} : { incomplet: true }) }];
     }
-    if (!ai) return [{ ...base, ...(receivedAt ? { date: parisDate(receivedAt) } : {}), incomplet: true }];
+    if (!ctx.lecteur.peutLire()) return [{ ...base, ...(receivedAt ? { date: parisDate(receivedAt) } : {}), incomplet: true }];
     const pdf = pdfs[0] ? await pdfData(token, msg, pdfs[0]) : undefined;
-    const r = await extractUber(body, pdf, { from, subject, receivedAt });
+    const r = await extractUber(body, pdf, { from, subject, receivedAt }, ctx.lecteur);
     if (!r) return [];
     return [{ ...base, ...r, ...(r.date && r.montant !== undefined ? {} : { incomplet: true }) }];
   }
@@ -118,11 +148,11 @@ async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "ube
     // Ce que dit le mail ne vaut que s'il n'y a qu'une facture jointe.
     const fromText = pdfs.length === 1 ? text : {};
     const base: InboxFacture = { kind: "facture", fournisseur: known ?? displayNameOf(from), ...fromText, source: sourceOf(msg, p.filename) };
-    if (!ai) {
+    if (!ctx.lecteur.peutLire()) {
       items.push(finish(base));
       continue;
     }
-    const r = await extractFacture(await pdfData(token, msg, p), { from, subject, filename: p.filename });
+    const r = await extractFacture(await pdfData(token, msg, p), { from, subject, filename: p.filename }, ctx.lecteur);
     if (!r) continue; // PDF qui n'est pas une facture (CGV, bon de livraison…)
     // Les valeurs écrites dans le mail priment (format fixe), le nom du fournisseur connu aussi (pour les doublons).
     items.push(finish({ ...base, ...r, ...fromText, fournisseur: known ?? r.fournisseur ?? base.fournisseur }));
@@ -162,8 +192,10 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
   const status = (await statusRef.get()).data() ?? {};
   const rules: MailRules = mergeRules(status.regles);
   const lastRun = typeof status.dernierPassage === "number" ? status.dernierPassage : 0;
-  // Premier passage : 31 jours en arrière. Ensuite : depuis le dernier passage, avec 2 jours de marge.
-  const days = lastRun ? Math.min(31, Math.max(3, Math.ceil((started - lastRun) / DAY) + 2)) : 31;
+  const lecteur = lecteurPour(status);
+  const maxJours = lecteur.reglages.joursPremierReleve;
+  // Premier passage : N jours en arrière (Réglages, 31 par défaut). Ensuite : depuis le dernier passage, avec 2 jours de marge.
+  const days = lastRun ? Math.min(maxJours, Math.max(3, Math.ceil((started - lastRun) / DAY) + 2)) : maxJours;
 
   try {
     const token = await refreshAccessToken(refreshToken);
@@ -188,7 +220,7 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
       try {
         const msg = await getMessage(token, id);
         const kind = classify(msg, rules, supplierEmails);
-        const items = kind ? await itemsFor(token, msg, kind, { rules, supplierByEmail }) : [];
+        const items = kind ? await itemsFor(token, msg, kind, { rules, supplierByEmail, lecteur }) : [];
         const now = Date.now();
         for (const [n, item] of items.entries()) {
           // Pièce qui concerne clairement l'autre restaurant : elle va dans son « À vérifier ».
@@ -221,18 +253,23 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
       }
     }
   } catch (e) {
+    await enregistrerConsommation(statusRef, lecteur);
     const reconnect = e instanceof GoogleAuthError;
     const out: SyncResult = { ...result, status: reconnect ? "reconnexion" : "erreur", message: (e as Error).message };
     await statusRef.set({ erreur: out.message, dernierEssai: Date.now() }, { merge: true });
     return out;
   }
 
+  result.lectures = lecteur.lectures;
+  result.coutUsd = Math.round(lecteur.cout * 10_000) / 10_000;
+  result.limite = lecteur.limite;
+  await enregistrerConsommation(statusRef, lecteur);
   await statusRef.set(
     {
       // Passage interrompu (temps écoulé) : on garde l'ancienne date pour que la fenêtre de recherche couvre la suite.
       ...(result.incomplet ? {} : { dernierPassage: started }),
       dernierEssai: started,
-      dernierResultat: { ...result, duree: Date.now() - started, lecturePdf: extractionEnabled() },
+      dernierResultat: { ...result, duree: Date.now() - started, lecturePdf: lecteur.actif },
       erreur: FieldValue.delete(),
     },
     { merge: true },
@@ -240,22 +277,13 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
   return result;
 }
 
-/** Relève les boîtes de tous les restaurants connectés, en partageant le temps disponible. */
-export async function syncAll(budgetMs: number): Promise<Record<RestaurantId, SyncResult>> {
-  const started = Date.now();
-  const out = {} as Record<RestaurantId, SyncResult>;
-  for (const [i, r] of RESTAURANTS.entries()) {
-    const left = budgetMs - (Date.now() - started);
-    out[r.id] = await syncMail(r.id, { budgetMs: Math.max(10_000, left / (RESTAURANTS.length - i)) });
-  }
-  return out;
-}
-
 export interface RelireResult {
   status: "ok" | "non_connecte" | "sans_cle" | "erreur";
   relus: number;
   completes: number;
   restants: number;
+  limite?: "max" | "budget" | null;
+  coutUsd?: number;
   message?: string;
 }
 
@@ -267,8 +295,10 @@ export interface RelireResult {
 export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }: { budgetMs?: number } = {}): Promise<RelireResult> {
   const started = Date.now();
   const out: RelireResult = { status: "ok", relus: 0, completes: 0, restants: 0 };
-  if (!extractionEnabled()) return { ...out, status: "sans_cle", message: "Ajoute ANTHROPIC_API_KEY dans Vercel pour activer la lecture des PDF." };
   const home = adminDb().doc(`restaurants/${rid}`);
+  const statusRef = home.collection("settings").doc("mail");
+  const lecteur = lecteurPour((await statusRef.get()).data() ?? {});
+  if (!lecteur.actif) return { ...out, status: "sans_cle", message: "Lecture des PDF désactivée (clé ANTHROPIC_API_KEY absente ou coupée dans Réglages)." };
   const refreshToken = (await home.collection("private").doc("gmail").get()).get("refreshToken") as string | undefined;
   if (!refreshToken) return { ...out, status: "non_connecte", message: "Boîte Gmail non connectée." };
 
@@ -281,7 +311,7 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }
   try {
     const token = await refreshAccessToken(refreshToken);
     for (const d of docs) {
-      if (Date.now() - started > budgetMs) break;
+      if (Date.now() - started > budgetMs || !lecteur.peutLire()) break;
       const item = d.get("item") as InboxItem;
       try {
         const msg = await getMessage(token, item.source!.messageId);
@@ -292,7 +322,7 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }
         let next: InboxItem | null = null;
         if (item.kind === "facture") {
           if (!pdf) continue;
-          const r = await extractFacture(await pdfData(token, msg, pdf), { from, subject, filename: pdf.filename });
+          const r = await extractFacture(await pdfData(token, msg, pdf), { from, subject, filename: pdf.filename }, lecteur);
           if (r) {
             const merged: InboxFacture = { ...r, ...dropEmpty(item), kind: "facture", source: item.source!, fournisseur: item.fournisseur || r.fournisseur || "" };
             const complete = merged.fournisseur && merged.dateFacture && merged.montantTTC !== undefined;
@@ -300,7 +330,7 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }
           }
         } else {
           const receivedAt = sourceOf(msg).receivedAt ?? "";
-          const r = await extractUber(bodyText(msg), pdf ? await pdfData(token, msg, pdf) : undefined, { from, subject, receivedAt });
+          const r = await extractUber(bodyText(msg), pdf ? await pdfData(token, msg, pdf) : undefined, { from, subject, receivedAt }, lecteur);
           if (r) {
             const merged: InboxUber = { ...r, ...dropEmpty(item), kind: "uber", source: item.source! };
             next = { ...merged, incomplet: merged.date && merged.montant !== undefined ? undefined : true } as InboxUber;
@@ -321,9 +351,11 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }
       }
     }
   } catch (e) {
+    await enregistrerConsommation(statusRef, lecteur);
     return { ...out, status: "erreur", message: e instanceof GoogleAuthError ? "Accès Gmail expiré : reconnecte la boîte." : (e as Error).message };
   }
-  return out;
+  await enregistrerConsommation(statusRef, lecteur);
+  return { ...out, limite: lecteur.limite, coutUsd: Math.round(lecteur.cout * 10_000) / 10_000 };
 }
 
 /** Garde uniquement les champs renseignés (pour ne pas écraser une valeur lue par une valeur vide). */

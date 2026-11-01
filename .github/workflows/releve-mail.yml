@@ -1,0 +1,24 @@
+# Réveil du relevé des mails toutes les heures (gratuit avec GitHub Actions).
+# Chaque restaurant n'est relevé que si l'intervalle choisi dans Réglages est écoulé.
+# À configurer une fois : Settings > Secrets and variables > Actions > New repository secret
+#   CRON_SECRET = même valeur que dans Vercel.
+name: Relevé des mails
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+jobs:
+  releve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Appeler /api/cron/mail
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then echo "Secret CRON_SECRET absent : ajoute-le dans les réglages du dépôt."; exit 1; fi
+          code=$(curl -sS -o out.json -w "%{http_code}" --max-time 320 -H "Authorization: Bearer $CRON_SECRET" https://tibs.vercel.app/api/cron/mail)
+          cat out.json; echo
+          test "$code" = "200"
