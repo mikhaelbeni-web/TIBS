@@ -7,8 +7,14 @@ import { adminApp, adminDb } from "@/lib/server/admin";
 export async function requireGerant(request: Request): Promise<string | Response> {
   const m = (request.headers.get("authorization") ?? "").match(/^Bearer (.+)$/);
   if (!m) return Response.json({ error: "non connecté" }, { status: 401 });
+  let app;
   try {
-    const { uid } = await getAuth(adminApp()).verifyIdToken(m[1]);
+    app = adminApp();
+  } catch (e) {
+    return Response.json({ error: (e as Error).message }, { status: 500 });
+  }
+  try {
+    const { uid } = await getAuth(app).verifyIdToken(m[1]);
     const user = await adminDb().doc(`users/${uid}`).get();
     if (user.get("role") !== "gerant") return Response.json({ error: "réservé au gérant" }, { status: 403 });
     return uid;

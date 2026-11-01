@@ -13,10 +13,23 @@ export function adminApp(): App {
   if (process.env.FIRESTORE_EMULATOR_HOST) {
     return initializeApp({ projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "demo-tibs" });
   }
+  return initializeApp({ credential: cert(serviceAccount() as Parameters<typeof cert>[0]) });
+}
+
+/** Lit FIREBASE_SERVICE_ACCOUNT (JSON brut ou base64) avec des erreurs compréhensibles. */
+export function serviceAccount(): { project_id?: string; client_email?: string; private_key?: string } {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT?.trim();
-  if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT manquant");
-  const json = JSON.parse(raw.startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf8"));
-  return initializeApp({ credential: cert(json) });
+  if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT est absent dans Vercel (ou le site n'a pas été redéployé).");
+  let json: { project_id?: string; client_email?: string; private_key?: string };
+  try {
+    json = JSON.parse(raw.startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf8"));
+  } catch {
+    throw new Error("FIREBASE_SERVICE_ACCOUNT est illisible : colle tout le contenu du fichier .json, de la première { à la dernière }.");
+  }
+  if (!json.private_key || !json.client_email) {
+    throw new Error("FIREBASE_SERVICE_ACCOUNT ne ressemble pas à une clé de compte de service (private_key ou client_email manquant).");
+  }
+  return json;
 }
 
 export const adminDb = () => getFirestore(adminApp());
