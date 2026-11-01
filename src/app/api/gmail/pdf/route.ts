@@ -1,6 +1,8 @@
 import { requireGerant, restaurantParam } from "@/lib/server/authz";
 import { adminDb } from "@/lib/server/admin";
-import { getAttachment, getMessage, GoogleAuthError, refreshAccessToken } from "@/lib/server/google";
+import { getAttachment, getMessage, GoogleAuthError } from "@/lib/server/google";
+import { jetonBoite } from "@/lib/server/mailSync";
+import { restaurant } from "@/lib/restaurants";
 import { pdfAttachments } from "@/lib/mail";
 import type { InboxItem } from "@/lib/ingest";
 
@@ -23,11 +25,11 @@ export async function POST(request: Request) {
   const item = snap.get("item") as InboxItem | undefined;
   const messageId = item?.source?.messageId;
   if (!messageId) return err(404, "Élément introuvable.");
-  const refreshToken = (await home.collection("private").doc("gmail").get()).get("refreshToken") as string | undefined;
-  if (!refreshToken) return err(409, "Boîte Gmail non connectée.");
+  const boite = item.source?.boite ?? rid;
 
   try {
-    const token = await refreshAccessToken(refreshToken);
+    const token = await jetonBoite(boite);
+    if (!token) return err(409, `Boîte Gmail ${restaurant(boite).court} non connectée.`);
     const msg = await getMessage(token, messageId);
     const pdfs = pdfAttachments(msg);
     const pdf = pdfs.find((p) => p.filename === item.source?.attachment) ?? pdfs[0];
@@ -42,7 +44,7 @@ export async function POST(request: Request) {
       },
     });
   } catch (e) {
-    if (e instanceof GoogleAuthError) return err(409, "Accès Gmail expiré : reconnecte la boîte dans « À vérifier ».");
+    if (e instanceof GoogleAuthError) return err(409, `Accès Gmail expiré : reconnecte la boîte ${restaurant(boite).court} dans « À vérifier ».`);
     return err(502, `Gmail : ${(e as Error).message}`.slice(0, 300));
   }
 }

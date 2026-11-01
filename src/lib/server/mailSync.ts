@@ -17,7 +17,7 @@ import {
   type GmailMessage,
   type MailRules,
 } from "@/lib/mail";
-import type { RestaurantId } from "@/lib/restaurants";
+import { RESTAURANT_IDS, type RestaurantId } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
 import { moisCle, parseConsommation, parseReglages } from "@/lib/reglages";
 import { extractFacture, extractUber, Lecteur } from "@/lib/server/extract";
@@ -175,6 +175,37 @@ async function isDuplicate(base: FirebaseFirestore.DocumentReference, item: Inbo
 }
 
 /**
+ * Éléments « À vérifier » créés avant l'ajout de source.boite : on retrouve leur boîte d'origine
+ * grâce au journal mailLog (un mail n'est journalisé que dans la boîte qui l'a relevé).
+ */
+async function marquerBoite(rid: RestaurantId) {
+  const db = adminDb();
+  for (const cible of RESTAURANT_IDS) {
+    const docs = (await db.collection(`restaurants/${cible}/inbox`).where("statut", "==", "a_verifier").get()).docs.filter(
+      (d) => !d.get("item.source.boite") && d.get("item.source.messageId"),
+    );
+    for (const d of docs) {
+      const log = await db.doc(`restaurants/${rid}/mailLog/${d.get("item.source.messageId")}`).get();
+      if (log.exists) await d.ref.update({ "item.source.boite": rid });
+    }
+  }
+}
+
+/** Jeton Gmail de la boîte d'un restaurant (mis en cache pour un passage). */
+export async function jetonBoite(rid: RestaurantId, cache = new Map<RestaurantId, Promise<string | null>>()): Promise<string | null> {
+  if (!cache.has(rid)) {
+    cache.set(
+      rid,
+      (async () => {
+        const refresh = (await adminDb().doc(`restaurants/${rid}/private/gmail`).get()).get("refreshToken") as string | undefined;
+        return refresh ? refreshAccessToken(refresh) : null;
+      })(),
+    );
+  }
+  return cache.get(rid)!;
+}
+
+/**
  * Relève la boîte Gmail d'un restaurant. Une facture qui mentionne clairement l'autre restaurant
  * (adresse, Prony en copie…) est déposée dans « À vérifier » de cet autre restaurant.
  */
@@ -229,7 +260,7 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
             result.doublons++;
             continue;
           }
-          const doc: InboxDoc = { item, statut: "a_verifier", receivedAt: now };
+          const doc: InboxDoc = { item: { ...item, source: { ...item.source, boite: rid } } as InboxItem, statut: "a_verifier", receivedAt: now };
           try {
             await target.collection("inbox").doc(inboxDocId(id, n)).create(doc);
             result.nouveaux++;
@@ -260,6 +291,7 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
     return out;
   }
 
+  await marquerBoite(rid).catch((e) => console.error("marquerBoite:", (e as Error).message));
   result.lectures = lecteur.lectures;
   result.coutUsd = Math.round(lecteur.cout * 10_000) / 10_000;
   result.limite = lecteur.limite;
@@ -309,10 +341,13 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }
   if (!docs.length) return out;
 
   try {
-    const token = await refreshAccessToken(refreshToken);
+    // Un élément peut venir de la boîte de l'autre restaurant : on lit le mail avec le jeton de sa boîte.
+    const jetons = new Map<RestaurantId, Promise<string | null>>([[rid, refreshAccessToken(refreshToken)]]);
     for (const d of docs) {
       if (Date.now() - started > budgetMs || !lecteur.peutLire()) break;
       const item = d.get("item") as InboxItem;
+      const token = await jetonBoite(item.source?.boite ?? rid, jetons);
+      if (!token) continue;
       try {
         const msg = await getMessage(token, item.source!.messageId);
         const from = header(msg, "From");

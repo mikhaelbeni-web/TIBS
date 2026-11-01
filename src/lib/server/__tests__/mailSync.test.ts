@@ -89,13 +89,15 @@ run("syncMail (émulateur)", () => {
     const inbox = await docs("19e");
     const hps = inbox.find((d) => d.id === "m1_0")!.item;
     expect(hps).toMatchObject({ kind: "facture", fournisseur: "Halles Paris Sud", numero: "FAC-20261009-004512", dateFacture: "2026-10-09", incomplet: true });
-    expect(hps.source).toMatchObject({ messageId: "m1", attachment: "FAC-20261009-004512.pdf" });
+    expect(hps.source).toMatchObject({ messageId: "m1", boite: "19e", attachment: "FAC-20261009-004512.pdf" });
     expect(inbox.find((d) => d.id === "m2_0")!.item).toMatchObject({ kind: "uber", date: "2026-10-15", montant: 478133, frais: 184069, brut: 780650 });
     expect(inbox.find((d) => d.id === "m2_0")!.item.incomplet).toBeUndefined();
     expect(inbox.some((d) => d.id === "m4_0")).toBe(false);
     // Facture Pennylane avec Prony en copie : déposée dans le portail du 17e.
     expect(inbox.some((d) => d.id === "m5_0")).toBe(false);
     expect((await docs("17e")).find((d) => d.id === "m5_0")!.item).toMatchObject({ fournisseur: "IMS Cash", montantTTC: 5800, etablissement: "17e" });
+    // Routée vers le 17e mais venue de la boîte du 19e.
+    expect((await docs("17e")).find((d) => d.id === "m5_0")!.item.source).toMatchObject({ boite: "19e" });
 
     const again = await syncMail("19e");
     expect(again).toMatchObject({ messagesVus: 0, nouveaux: 0 });
