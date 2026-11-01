@@ -8,6 +8,7 @@ import {
   emailOf,
   frenchCents,
   gmailQuery,
+  lirePeriode,
   knownSupplier,
   mergeRules,
   parseFactureText,
@@ -128,5 +129,21 @@ describe("mail", () => {
   it("construit la requête Gmail", () => {
     const q = gmailQuery(3, DEFAULT_RULES);
     expect(q.startsWith("newer_than:3d -in:sent -in:spam -in:trash -from:me -category:promotions (has:attachment filename:pdf OR from:(noreply@uber.com OR restaurantsfrance@uber.com OR hpsrungis.com")).toBe(true);
+  });
+});
+
+describe("recherche sur une période", () => {
+  it("borne la requête Gmail aux dates choisies, fin comprise", () => {
+    const q = gmailQuery(3, DEFAULT_RULES, { du: "2026-10-01", au: "2026-10-31" });
+    expect(q).toContain("after:2026/10/01 before:2026/11/01");
+    expect(q).not.toContain("newer_than");
+  });
+  it("valide les dates", () => {
+    expect(lirePeriode(null, null)).toBeNull();
+    expect(lirePeriode("2026-10-01", "2026-10-31")).toEqual({ du: "2026-10-01", au: "2026-10-31" });
+    expect(typeof lirePeriode("2026-10-01", null)).toBe("string");
+    expect(typeof lirePeriode("2026-11-01", "2026-10-01")).toBe("string");
+    expect(typeof lirePeriode("2026-02-30", "2026-03-01")).toBe("string");
+    expect(typeof lirePeriode("2024-01-01", "2026-01-01")).toBe("string");
   });
 });

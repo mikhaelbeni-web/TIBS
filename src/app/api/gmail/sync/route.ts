@@ -1,10 +1,12 @@
 import { requireGerant, restaurantParam } from "@/lib/server/authz";
+import { lirePeriode } from "@/lib/mail";
 import { relireIncomplets, syncMail } from "@/lib/server/mailSync";
 
 export const maxDuration = 300;
 
 /**
  * POST /api/gmail/sync?r=19e (gérant)
+ * - du=AAAA-MM-JJ&au=AAAA-MM-JJ : recherche limitée à cette période (mails écartés réexaminés) ;
  * - sans mode : bouton « Relever les mails » (nouveaux mails, leurs PDF lus dans la limite des Réglages,
  *   puis relecture des éléments encore à compléter) ;
  * - mode=lire : bouton « Lire les PDF avec l'IA » (relit tous les éléments à compléter, même ceux en échec) ;
@@ -25,8 +27,10 @@ export async function POST(request: Request) {
     return Response.json({ status: "ok", relu });
   }
 
+  const periode = lirePeriode(params.get("du"), params.get("au"));
+  if (typeof periode === "string") return Response.json({ error: periode }, { status: 400 });
   const started = Date.now();
-  const r = await syncMail(rid, { budgetMs: 200_000 });
+  const r = await syncMail(rid, { budgetMs: 200_000, periode });
   if (r.status === "erreur") return Response.json(r, { status: 502 });
   const relu = r.status === "ok" ? await relireIncomplets(rid, { budgetMs: Math.max(0, 250_000 - (Date.now() - started)) }) : undefined;
   return Response.json({ ...r, relu });

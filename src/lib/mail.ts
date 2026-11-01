@@ -239,11 +239,37 @@ export function classify(msg: GmailMessage, rules: MailRules, supplierEmails: st
   return null;
 }
 
-/** Requête Gmail : mails récents avec PDF, des fournisseurs connus ou d'Uber (hors envoyés, spam, promotions). */
-export function gmailQuery(days: number, rules: MailRules): string {
+/** Période choisie à la main (dates AAAA-MM-JJ, bornes comprises). */
+export interface Periode {
+  du: string;
+  au: string;
+}
+
+const ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Période valide : dates réelles, du ≤ au, au plus 366 jours. Sinon un message d'erreur. */
+export function lirePeriode(du: string | null, au: string | null): Periode | string | null {
+  if (!du && !au) return null;
+  if (!du || !au || !ISO.test(du) || !ISO.test(au)) return "Choisis une date de début et une date de fin.";
+  const a = Date.parse(`${du}T00:00:00Z`);
+  const b = Date.parse(`${au}T00:00:00Z`);
+  if (Number.isNaN(a) || Number.isNaN(b) || new Date(a).toISOString().slice(0, 10) !== du || new Date(b).toISOString().slice(0, 10) !== au) return "Date invalide.";
+  if (a > b) return "La date de début est après la date de fin.";
+  if (b - a > 366 * 86_400_000) return "Période trop longue : un an au maximum.";
+  return { du, au };
+}
+
+/** "2026-10-31" → "2026/11/01" (lendemain, car « before: » exclut le jour donné). */
+function lendemain(iso: string): string {
+  return new Date(Date.parse(`${iso}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10).replace(/-/g, "/");
+}
+
+/** Requête Gmail : mails récents (ou de la période) avec PDF, des fournisseurs connus ou d'Uber (hors envoyés, spam, promotions). */
+export function gmailQuery(days: number, rules: MailRules, periode?: Periode | null): string {
   const senders = [...rules.uberExpediteurs, ...Object.keys(rules.fournisseurs)];
   const from = senders.length ? ` OR from:(${senders.join(" OR ")})` : "";
-  return `newer_than:${days}d -in:sent -in:spam -in:trash -from:me -category:promotions (has:attachment filename:pdf${from})`;
+  const quand = periode ? `after:${periode.du.replace(/-/g, "/")} before:${lendemain(periode.au)}` : `newer_than:${days}d`;
+  return `${quand} -in:sent -in:spam -in:trash -from:me -category:promotions (has:attachment filename:pdf${from})`;
 }
 
 // ---------------------------------------------------------------------------

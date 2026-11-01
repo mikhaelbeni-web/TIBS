@@ -107,6 +107,9 @@ function MailCard() {
   const [busy, setBusy] = useState<"connect" | "sync" | "lire" | "disconnect" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [periode, setPeriode] = useState(false);
+  const [du, setDu] = useState("");
+  const [au, setAu] = useState("");
 
   useEffect(() => onSnapshot(doc(db(), "restaurants", rid, "settings", "mail"), (s) => setStatus((s.data() as MailStatus) ?? {}), (e) => setError(e.message)), [rid]);
 
@@ -126,12 +129,14 @@ function MailCard() {
         setInfo(relu.status === "ok" ? texteRelu(relu, true) : relu.message);
         return;
       }
+      if (kind === "sync" && periode && (!du || !au)) throw new Error("Choisis une date de début et une date de fin, ou retire la période.");
       if (kind === "disconnect" && !confirm("Déconnecter la boîte mail ? Les relevés automatiques s'arrêtent.")) return;
-      const r = await api(user, `/api/gmail/${kind === "sync" ? "sync" : "disconnect"}?r=${rid}`);
+      const filtre = kind === "sync" && periode ? `&du=${du}&au=${au}` : "";
+      const r = await api(user, `/api/gmail/${kind === "sync" ? "sync" : "disconnect"}?r=${rid}${filtre}`);
       if (kind === "sync") {
         setInfo(
           r.status === "ok"
-            ? `${r.messagesVus} mail(s) lu(s), ${r.nouveaux} élément(s) ajouté(s)${r.releves ? `, ${r.releves} relevé(s) fournisseur rangé(s) dans Factures` : ""}.${r.incomplet ? " Il en reste : relance pour continuer." : ""}`
+            ? `${filtre ? `Du ${fr(du)} au ${fr(au)} : ` : ""}${r.messagesVus} mail(s) lu(s), ${r.nouveaux} élément(s) ajouté(s)${r.releves ? `, ${r.releves} relevé(s) fournisseur rangé(s) dans Factures` : ""}.${r.incomplet ? " Il en reste : relance pour continuer." : ""}`
             : r.message,
         );
         if (r.relu?.status === "ok" && r.relu.relus) setInfo((i) => `${i ?? ""} ${texteRelu(r.relu)}`.trim());
@@ -163,6 +168,27 @@ function MailCard() {
       {retour && RETOUR_GMAIL[retour] && <p className="rounded-control bg-info-soft p-3 text-sm">{RETOUR_GMAIL[retour]}</p>}
       {info && <p className="rounded-control bg-success-soft p-3 text-sm">{info}</p>}
       <ErrorBox message={error || status?.erreur || null} />
+      {connected && !status?.erreur && (
+        <div className="space-y-2">
+          <label className="flex min-h-11 items-center gap-2 text-sm">
+            <input type="checkbox" className="size-5" checked={periode} onChange={(e) => setPeriode(e.target.checked)} disabled={busy !== null} />
+            Relever une période précise
+          </label>
+          {periode && (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Du">
+                  <Input type="date" value={du} max={au || undefined} onChange={(e) => setDu(e.target.value)} />
+                </Field>
+                <Field label="Au">
+                  <Input type="date" value={au} min={du || undefined} onChange={(e) => setAu(e.target.value)} />
+                </Field>
+              </div>
+              <p className="text-xs text-muted">Les mails de cette période déjà écartés sont réexaminés avec les règles actuelles. Ceux déjà ajoutés ne sont pas dupliqués.</p>
+            </>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
         {connected ? (
           <>
