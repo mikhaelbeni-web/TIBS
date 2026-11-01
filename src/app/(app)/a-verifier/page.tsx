@@ -41,8 +41,13 @@ function dateTime(ms?: number) {
 
 async function api(user: { getIdToken: () => Promise<string> }, path: string) {
   const res = await fetch(path, { method: "POST", headers: { authorization: `Bearer ${await user.getIdToken()}` } });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || json.message || (res.status >= 500 ? `Erreur serveur ${res.status} : ouvre tibs.vercel.app/api/diagnostic pour voir la cause.` : `Erreur ${res.status}`));
+  const text = await res.text();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let json: any = {};
+  try {
+    json = JSON.parse(text);
+  } catch {}
+  if (!res.ok) throw new Error(json.error || json.message || `Erreur ${res.status}${text ? ` : ${text.slice(0, 200)}` : ""}`);
   return json;
 }
 
