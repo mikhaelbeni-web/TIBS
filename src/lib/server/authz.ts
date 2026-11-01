@@ -1,22 +1,21 @@
 import "server-only";
 import { isRestaurantId, type RestaurantId } from "@/lib/restaurants";
-import { adminApp, adminDb } from "@/lib/server/admin";
+import { adminDb, serviceAccount } from "@/lib/server/admin";
+import { verifyFirebaseIdToken } from "@/lib/server/idToken";
 
 /** Vérifie le jeton Firebase envoyé par l'app (Authorization: Bearer <idToken>) et le rôle gérant. */
 export async function requireGerant(request: Request): Promise<string | Response> {
   const m = (request.headers.get("authorization") ?? "").match(/^Bearer (.+)$/);
   if (!m) return Response.json({ error: "non connecté" }, { status: 401 });
-  let auth;
+  let projectId: string;
   try {
-    // Import dynamique : une panne de chargement du module devient un message lisible au lieu d'un plantage.
-    const { getAuth } = await import("firebase-admin/auth");
-    auth = getAuth(adminApp());
+    projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || serviceAccount().project_id || "";
   } catch (e) {
     return Response.json({ error: `Serveur : ${(e as Error).message}` }, { status: 500 });
   }
   let uid: string;
   try {
-    ({ uid } = await auth.verifyIdToken(m[1]));
+    uid = await verifyFirebaseIdToken(m[1], projectId);
   } catch (e) {
     console.error("verifyIdToken", e);
     return Response.json({ error: "session expirée, reconnecte-toi" }, { status: 401 });
