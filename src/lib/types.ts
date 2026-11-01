@@ -41,8 +41,15 @@ export interface Supplier {
   siret?: string;
   email?: string;
   categorie?: string; // boissons, viande, emballage…
+  /** Virement : à payer par le gérant. Prélèvement : le fournisseur se sert, à contrôler. Défaut : virement. */
+  paiement?: ModePaiement;
+  iban?: string;
+  /** Mots du libellé bancaire du prélèvement (ex. « METRO, MAKRO »), sinon le nom du fournisseur. */
+  libelleBanque?: string;
   createdAt: number;
 }
+
+export type ModePaiement = "virement" | "prelevement";
 
 export type StatutFacture = "a_payer" | "payee" | "litige";
 
@@ -59,6 +66,8 @@ export interface Invoice {
   montantTTC: number; // centimes
   statut: StatutFacture;
   datePaiement?: string;
+  /** Comment la facture a été réglée (renseigné au marquage « Virement fait » / « Contrôlé »). */
+  paiement?: ModePaiement;
   note?: string;
   /** Restaurant concerné : 19e (SAS AVA, rue Manin) ou 17e (rue de Prony). */
   etablissement?: "19e" | "17e";

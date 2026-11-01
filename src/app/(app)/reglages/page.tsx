@@ -1,10 +1,10 @@
 "use client";
 
 import { doc, onSnapshot } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { useRestaurant } from "@/components/RestaurantProvider";
-import { Badge, Button, Card, ErrorBox, Field, Input, PageHeader, Select } from "@/components/ui";
+import { Badge, Button, Card, Field, Input, PageHeader, Select } from "@/components/ui";
 import { db } from "@/lib/firebase";
 import { DEFAULT_RULES, mergeRules, type MailRules } from "@/lib/mail";
 import {
@@ -86,43 +86,59 @@ export default function ReglagesPage() {
   const [reglages, setReglages] = useState<Reglages>(DEFAULT_REGLAGES);
   const [regles, setRegles] = useState<MailRules>(DEFAULT_RULES);
   const [dirty, setDirty] = useState(false);
+  // Lu dans l'écoute Firestore (sinon la valeur capturée au montage reste false et écrase la saisie).
+  const dirtyRef = useRef(false);
+  const version = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [nouvelExp, setNouvelExp] = useState("");
   const [nouveauNom, setNouveauNom] = useState("");
 
-  useEffect(
-    () =>
-      onSnapshot(
-        doc(db(), "restaurants", rid, "settings", "mail"),
-        (s) => {
-          const d = (s.data() as MailDoc) ?? {};
-          setData(d);
-          if (!dirty) {
-            setReglages(parseReglages(d.reglages));
-            setRegles(mergeRules(d.regles));
-          }
-        },
-        (e) => setError(e.message),
-      ),
+  useEffect(() => {
+    dirtyRef.current = false;
+    return onSnapshot(
+      doc(db(), "restaurants", rid, "settings", "mail"),
+      (s) => {
+        const d = (s.data() as MailDoc) ?? {};
+        setData(d);
+        if (!dirtyRef.current) {
+          setReglages(parseReglages(d.reglages));
+          setRegles(mergeRules(d.regles));
+        }
+      },
+      (e) => setError(e.message),
+    );
+  }, [rid]);
+
+  function marquer() {
+    version.current++;
+    dirtyRef.current = true;
+    setDirty(true);
+  }
+
+  // Enregistrement automatique, un court instant après la dernière modification.
+  useEffect(() => {
+    if (!dirty || !user) return;
+    const t = setTimeout(save, 700);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rid],
-  );
+  }, [reglages, regles, dirty, user]);
 
   const setR = <K extends keyof Reglages>(k: K, v: Reglages[K]) => {
     setReglages((r) => ({ ...r, [k]: v }));
-    setDirty(true);
+    marquer();
     setInfo(null);
   };
   const setRule = <K extends keyof MailRules>(k: K, v: MailRules[K]) => {
     setRegles((r) => ({ ...r, [k]: v }));
-    setDirty(true);
+    marquer();
     setInfo(null);
   };
 
   async function save() {
     if (!user) return;
+    const v = version.current;
     setBusy(true);
     setError(null);
     try {
@@ -133,8 +149,11 @@ export default function ReglagesPage() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `Erreur ${res.status}`);
-      setDirty(false);
-      setInfo(`Réglages de ${current.court} enregistrés.`);
+      if (version.current === v) {
+        dirtyRef.current = false;
+        setDirty(false);
+      }
+      setInfo(`Enregistré pour ${current.court}.`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -301,16 +320,17 @@ export default function ReglagesPage() {
         </div>
       </Card>
 
-      {info && <p className="rounded-control bg-success-soft p-3 text-sm">{info}</p>}
-      <ErrorBox message={error} />
-
-      {/* Barre d'enregistrement, au-dessus de la navigation du bas sur téléphone */}
+      {/* État de l'enregistrement automatique, au-dessus de la navigation du bas sur téléphone */}
       <div className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-20 border-t border-border bg-surface/95 p-3 backdrop-blur md:static md:border-0 md:bg-transparent md:p-0">
-        <div className="mx-auto flex max-w-5xl items-center justify-end gap-2">
-          {dirty && <span className="mr-auto text-sm text-muted">Modifications non enregistrées</span>}
-          <Button className="w-full sm:w-auto" disabled={busy || !dirty} onClick={save}>
-            {busy ? "Enregistrement…" : "Enregistrer"}
-          </Button>
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 text-sm">
+          {error ? (
+            <>
+              <span className="min-w-0 text-danger">Non enregistré : {error}</span>
+              <Button variant="secondary" disabled={busy} onClick={save}>Réessayer</Button>
+            </>
+          ) : (
+            <span className="text-muted">{busy || dirty ? "Enregistrement…" : info ? `✓ ${info}` : "Les changements sont enregistrés automatiquement."}</span>
+          )}
         </div>
       </div>
     </div>
