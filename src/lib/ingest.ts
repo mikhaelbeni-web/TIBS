@@ -1,4 +1,5 @@
 import { toCents, toIsoDate } from "./money";
+import { isRestaurantId, type RestaurantId } from "./restaurants";
 
 /**
  * Charge utile envoyée par la tâche quotidienne qui lit la boîte mail du restaurant.
@@ -13,6 +14,7 @@ export interface InboxSource {
   subject?: string;
   receivedAt?: string; // ISO
   attachment?: string; // nom du PDF
+  boite?: RestaurantId; // boîte Gmail d'où vient le mail (19e ou 17e)
 }
 
 /**
@@ -68,6 +70,7 @@ function source(raw: unknown): InboxSource | string {
     ...(str(s.subject) ? { subject: str(s.subject).slice(0, 300) } : {}),
     ...(str(s.receivedAt) ? { receivedAt: str(s.receivedAt) } : {}),
     ...(str(s.attachment) ? { attachment: str(s.attachment) } : {}),
+    ...(isRestaurantId(s.boite) ? { boite: s.boite } : {}),
   };
 }
 

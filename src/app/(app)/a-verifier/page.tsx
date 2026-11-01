@@ -6,10 +6,11 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
 import { useRestaurant } from "@/components/RestaurantProvider";
-import { isRestaurantId } from "@/lib/restaurants";
+import { isRestaurantId, restaurant, type RestaurantId } from "@/lib/restaurants";
 import { db } from "@/lib/firebase";
 import type { InboxDoc, InboxItem } from "@/lib/ingest";
 import { formatEuros, toCents } from "@/lib/money";
+import { parseReglages } from "@/lib/reglages";
 import { useCollection } from "@/lib/useCollection";
 
 const fr = (iso?: string) => (iso ? iso.split("-").reverse().join("/") : "");
@@ -17,12 +18,27 @@ const euros = (c?: number) => (c === undefined ? "" : (c / 100).toFixed(2).repla
 const gmailLink = (id: string, mailbox?: string) =>
   `https://mail.google.com/mail/${mailbox ? `?authuser=${encodeURIComponent(mailbox)}` : ""}#all/${id}`;
 
+/** Boîte Gmail d'où vient l'élément : pastille de couleur du restaurant + adresse. */
+function Boite({ boite, adresse, className = "" }: { boite?: RestaurantId; adresse?: string; className?: string }) {
+  if (!boite) return null;
+  const r = restaurant(boite);
+  return (
+    <div className={`flex min-w-0 items-center gap-1.5 text-xs text-muted ${className}`}>
+      <span className={`size-2 shrink-0 rounded-full ${r.couleur}`} aria-hidden />
+      <span className="truncate">
+        Mail {r.court} · {adresse || r.boiteMail}
+      </span>
+    </div>
+  );
+}
+
 interface MailStatus {
   adresse?: string;
   connecteLe?: number;
   dernierPassage?: number;
   dernierEssai?: number;
   erreur?: string;
+  reglages?: unknown;
   dernierResultat?: { nouveaux: number; messagesVus: number; erreurs: number; incomplet: boolean; lecturePdf?: boolean };
 }
 
@@ -34,6 +50,12 @@ const RETOUR_GMAIL: Record<string, string> = {
   pas_de_jeton: "Google n'a pas donné d'accès durable : retire l'app dans ton compte Google (Sécurité > Applications tierces) puis reconnecte.",
   erreur: "La connexion a échoué. Vérifie les identifiants Google dans Vercel.",
 };
+
+function frequence(raw: unknown) {
+  const r = parseReglages(raw);
+  if (!r.releveAuto) return "coupé (voir Réglages)";
+  return r.frequenceHeures === 24 ? "une fois par jour" : r.frequenceHeures === 1 ? "toutes les heures" : `toutes les ${r.frequenceHeures} h`;
+}
 
 function dateTime(ms?: number) {
   return ms ? new Date(ms).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }) : "jamais";
@@ -112,7 +134,7 @@ function MailCard() {
       </div>
       {connected && (
         <p className="text-sm text-muted">
-          Relevé automatique chaque matin. Dernier relevé : {dateTime(status?.dernierPassage)}
+          Relevé automatique {frequence(status?.reglages)}. Dernier relevé : {dateTime(status?.dernierPassage)}
           {status?.dernierResultat ? ` (${status.dernierResultat.nouveaux} ajouté(s))` : ""}.
           {status?.dernierResultat && status.dernierResultat.lecturePdf === false ? " Lecture des PDF désactivée : montants à saisir." : ""}
         </p>
@@ -312,16 +334,19 @@ function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mai
   }
 
   const facture = d.item.kind === "facture";
+  const boite = d.item.source.boite;
+  const adresseBoite = !boite || boite === rid ? mailbox : restaurant(boite).boiteMail;
   return (
     <Sheet open onClose={onClose} title={facture ? "Facture reçue par mail" : "Versement Uber Eats"}>
       <div className="space-y-3">
         <div className="text-sm text-muted">
+          <Boite boite={boite} adresse={adresseBoite} className="mb-1 text-sm" />
           <div className="truncate">{d.item.source.from}</div>
           <div className="truncate">{d.item.source.subject}</div>
           {d.item.source.attachment && <div className="truncate">PDF : {d.item.source.attachment}</div>}
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
             {d.item.source.attachment && <PdfApercu id={id} nom={facture ? "la facture" : "le PDF"} />}
-            <a className="font-medium text-ink underline" href={gmailLink(d.item.source.messageId, mailbox)} target="_blank" rel="noreferrer">
+            <a className="font-medium text-ink underline" href={gmailLink(d.item.source.messageId, adresseBoite)} target="_blank" rel="noreferrer">
               Ouvrir le mail dans Gmail
             </a>
           </div>
@@ -406,6 +431,7 @@ function AVerifier() {
                         : [fr(d.item.date), d.item.reference].filter(Boolean).join(" · ")}
                     </div>
                     <div className="truncate text-xs text-muted">{d.item.source.subject}</div>
+                    <Boite boite={d.item.source.boite} adresse={d.item.source.boite === rid ? mailbox : undefined} className="mt-1" />
                   </div>
                   <div className="shrink-0 text-right">
                     <div className="font-semibold tabular-nums">{amountOf(d.item)}</div>
