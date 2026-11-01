@@ -34,21 +34,16 @@ export async function GET() {
       out.base_de_donnees = `erreur : ${(e as Error).message}`;
     }
   }
-  // Chargement du module d'authentification (sert à vérifier la session du gérant).
+  // Vérification des sessions : récupère les clés publiques de Google.
   out.authentification = "non testée";
-  if (out.FIREBASE_SERVICE_ACCOUNT === "ok") {
-    try {
-      const { getAuth } = await import("firebase-admin/auth");
-      const { adminApp } = await import("@/lib/server/admin");
-      await getAuth(adminApp())
-        .verifyIdToken("test")
-        .catch((e: { code?: string; message?: string }) => {
-          if (e.code !== "auth/argument-error") throw e;
-        });
-      out.authentification = "ok";
-    } catch (e) {
-      out.authentification = `erreur : ${(e as Error).message}`;
-    }
+  try {
+    const { verifyFirebaseIdToken } = await import("@/lib/server/idToken");
+    await verifyFirebaseIdToken("x.y.z", process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "").catch((e: { code?: string }) => {
+      if (e.code !== "ERR_JWS_INVALID" && e.code !== "ERR_JWT_INVALID") throw e;
+    });
+    out.authentification = "ok";
+  } catch (e) {
+    out.authentification = `erreur : ${(e as Error).message}`;
   }
   const toutOk = Object.values(out).every((v) => v === "ok");
   return Response.json({ toutOk, ...out }, { headers: { "cache-control": "no-store" } });
