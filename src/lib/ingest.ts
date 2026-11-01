@@ -21,6 +21,9 @@ export interface InboxSource {
  * Les champs « ? » peuvent manquer quand le PDF n'a pas pu être lu (incomplet = true) :
  * le gérant les complète au moment de valider.
  */
+/** Pourquoi le PDF n'a pas été lu par l'IA (affiché dans la fiche). */
+export type Lecture = "limite" | "budget" | "desactivee" | "pas_facture" | "pas_de_pdf" | "erreur";
+
 export interface InboxFacture {
   kind: "facture";
   fournisseur: string;
@@ -32,6 +35,8 @@ export interface InboxFacture {
   montantTTC?: number;
   etablissement?: "19e" | "17e";
   incomplet?: boolean;
+  lecture?: Lecture;
+  lectureErreur?: string;
   source: InboxSource;
 }
 
@@ -43,6 +48,8 @@ export interface InboxUber {
   frais?: number;
   reference?: string;
   incomplet?: boolean;
+  lecture?: Lecture;
+  lectureErreur?: string;
   source: InboxSource;
 }
 
@@ -53,6 +60,7 @@ export interface InboxDoc {
   statut: "a_verifier" | "valide" | "rejete";
   receivedAt: number;
   traiteLe?: number;
+  relu?: number; // dernière relecture du PDF par l'IA
 }
 
 type Raw = Record<string, unknown>;

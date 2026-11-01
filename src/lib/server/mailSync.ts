@@ -122,7 +122,7 @@ async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "ube
       };
       return [{ ...item, ...(item.date ? {} : { incomplet: true }) }];
     }
-    if (!ctx.lecteur.peutLire()) return [{ ...base, ...(receivedAt ? { date: parisDate(receivedAt) } : {}), incomplet: true }];
+    if (!ctx.lecteur.peutLire()) return [{ ...base, ...(receivedAt ? { date: parisDate(receivedAt) } : {}), incomplet: true, lecture: ctx.lecteur.raison }];
     const pdf = pdfs[0] ? await pdfData(token, msg, pdfs[0]) : undefined;
     const r = await extractUber(body, pdf, { from, subject, receivedAt }, ctx.lecteur);
     if (!r) return [];
@@ -149,7 +149,8 @@ async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "ube
     const fromText = pdfs.length === 1 ? text : {};
     const base: InboxFacture = { kind: "facture", fournisseur: known ?? displayNameOf(from), ...fromText, source: sourceOf(msg, p.filename) };
     if (!ctx.lecteur.peutLire()) {
-      items.push(finish(base));
+      const it = finish(base);
+      items.push(it.incomplet ? { ...it, lecture: ctx.lecteur.raison } : it);
       continue;
     }
     const r = await extractFacture(await pdfData(token, msg, p), { from, subject, filename: p.filename }, ctx.lecteur);
@@ -309,6 +310,14 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
   return result;
 }
 
+export interface RelireOptions {
+  budgetMs?: number;
+  /** Uniquement ces éléments (bouton de la fiche). */
+  ids?: string[];
+  /** Bouton « Lire les PDF avec l'IA » : relit aussi ceux déjà jugés illisibles ou en erreur. */
+  force?: boolean;
+}
+
 export interface RelireResult {
   status: "ok" | "non_connecte" | "sans_cle" | "erreur";
   relus: number;
@@ -324,7 +333,7 @@ export interface RelireResult {
  * avant l'ajout de ANTHROPIC_API_KEY). Ne remplit que les champs vides : rien de ce qui est déjà
  * renseigné n'est écrasé.
  */
-export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }: { budgetMs?: number } = {}): Promise<RelireResult> {
+export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000, ids, force = false }: RelireOptions = {}): Promise<RelireResult> {
   const started = Date.now();
   const out: RelireResult = { status: "ok", relus: 0, completes: 0, restants: 0 };
   const home = adminDb().doc(`restaurants/${rid}`);
@@ -334,15 +343,20 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }
   const refreshToken = (await home.collection("private").doc("gmail").get()).get("refreshToken") as string | undefined;
   if (!refreshToken) return { ...out, status: "non_connecte", message: "Boîte Gmail non connectée." };
 
+  // Relecture automatique : on ne repaie pas un PDF déjà jugé « pas une facture » ou en erreur.
   const docs = (await home.collection("inbox").where("statut", "==", "a_verifier").get()).docs.filter(
-    (d) => d.get("item.incomplet") === true && d.get("item.source.messageId"),
+    (d) =>
+      d.get("item.source.messageId") &&
+      (ids ? ids.includes(d.id) : d.get("item.incomplet") === true && (force || !["pas_facture", "erreur"].includes(d.get("item.lecture")))),
   );
   out.restants = docs.length;
   if (!docs.length) return out;
 
   try {
     // Un élément peut venir de la boîte de l'autre restaurant : on lit le mail avec le jeton de sa boîte.
-    const jetons = new Map<RestaurantId, Promise<string | null>>([[rid, refreshAccessToken(refreshToken)]]);
+    const propre = refreshAccessToken(refreshToken);
+    propre.catch(() => {}); // l'erreur remonte quand le jeton est utilisé
+    const jetons = new Map<RestaurantId, Promise<string | null>>([[rid, propre]]);
     for (const d of docs) {
       if (Date.now() - started > budgetMs || !lecteur.peutLire()) break;
       const item = d.get("item") as InboxItem;
@@ -356,7 +370,10 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }
         const pdf = pdfs.find((p) => p.filename === item.source?.attachment) ?? pdfs[0];
         let next: InboxItem | null = null;
         if (item.kind === "facture") {
-          if (!pdf) continue;
+          if (!pdf) {
+            await d.ref.update({ "item.lecture": "pas_de_pdf" });
+            continue;
+          }
           const r = await extractFacture(await pdfData(token, msg, pdf), { from, subject, filename: pdf.filename }, lecteur);
           if (r) {
             const merged: InboxFacture = { ...r, ...dropEmpty(item), kind: "facture", source: item.source!, fournisseur: item.fournisseur || r.fournisseur || "" };
@@ -373,16 +390,21 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }
         }
         out.relus++;
         if (next) {
+          delete next.lecture;
+          delete next.lectureErreur;
           if (!next.incomplet) {
             delete next.incomplet;
             out.completes++;
             out.restants--;
           }
           await d.ref.update({ item: JSON.parse(JSON.stringify(next)), relu: Date.now() });
+        } else {
+          await d.ref.update({ "item.lecture": "pas_facture", "item.lectureErreur": FieldValue.delete(), relu: Date.now() });
         }
       } catch (e) {
         if (e instanceof GoogleAuthError) throw e;
         console.error("relire", d.id, e);
+        await d.ref.update({ "item.lecture": "erreur", "item.lectureErreur": String((e as Error).message).slice(0, 300), relu: Date.now() });
       }
     }
   } catch (e) {
