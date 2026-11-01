@@ -1,13 +1,15 @@
 "use client";
 
-import { addDoc, collection, deleteDoc, doc, updateDoc } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, updateDoc, writeBatch } from "firebase/firestore";
 import Link from "next/link";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Sheet } from "@/components/ui";
 import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import { formatEuros, toCents } from "@/lib/money";
-import type { Invoice, StatutFacture, Supplier, WithId } from "@/lib/types";
+import { controlerPrelevement, echeanceVirement, grouperParFournisseur, referenceVirement, type GroupeFournisseur } from "@/lib/paiements";
+import type { BankTransaction, Invoice, ModePaiement, StatutFacture, Supplier, WithId } from "@/lib/types";
+import { SupplierForm } from "@/components/SupplierForm";
 import { useCollection } from "@/lib/useCollection";
 
 const fr = (iso?: string) => (iso ? iso.split("-").reverse().join("/") : "");
@@ -23,8 +25,12 @@ export default function FacturesPage() {
   const { items, loading, error } = useCollection<Invoice>("invoices", "dateFacture", true);
   const suppliers = useCollection<Supplier>("suppliers", "nom");
   const [mois, setMois] = useState(thisMonth());
+  const banque = useCollection<BankTransaction>("bankTransactions", "date", true);
+  const [vue, setVue] = useState<"paiements" | "liste">("paiements");
   const [editing, setEditing] = useState<WithId<Invoice> | "new" | null>(null);
+  const [fournisseur, setFournisseur] = useState<WithId<Supplier> | null>(null);
   const close = useCallback(() => setEditing(null), []);
+  const closeFournisseur = useCallback(() => setFournisseur(null), []);
 
   const month = useMemo(() => items.filter((i) => i.mois === mois), [items, mois]);
   const totals = useMemo(
@@ -40,11 +46,18 @@ export default function FacturesPage() {
       ),
     [month],
   );
-  const bySupplier = useMemo(() => {
-    const m = new Map<string, number>();
-    month.forEach((i) => m.set(i.supplierNom, (m.get(i.supplierNom) ?? 0) + i.montantTTC));
-    return [...m.entries()].sort((a, b) => b[1] - a[1]);
-  }, [month]);
+  const groupes = useMemo(() => grouperParFournisseur(month, suppliers.items), [month, suppliers.items]);
+  const aVirer = groupes.filter((g) => g.mode === "virement");
+  const prelevements = groupes.filter((g) => g.mode === "prelevement");
+  const somme = (gs: GroupeFournisseur[]) => gs.reduce((t, g) => t + g.reste, 0);
+
+  /** Marque payées toutes les factures « à payer » du groupe (un seul virement, ou prélèvement contrôlé). */
+  async function regler(g: GroupeFournisseur, mode: ModePaiement) {
+    const batch = writeBatch(db());
+    const jour = new Date().toISOString().slice(0, 10);
+    g.factures.filter((f) => f.statut === "a_payer").forEach((f) => batch.update(doc(db(), "restaurants", rid, "invoices", f.id), { statut: "payee", datePaiement: jour, paiement: mode }));
+    await batch.commit();
+  }
 
   function exportCsv() {
     const head = "Fournisseur;N° facture;Date;Échéance;HT;TVA;TTC;Statut;Payée le";
@@ -86,28 +99,51 @@ export default function FacturesPage() {
       <Field label="Mois"><Input type="month" value={mois} onChange={(e) => setMois(e.target.value || thisMonth())} className="sm:w-56" /></Field>
 
       <div className="my-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card><div className="text-xs text-muted">Total HT</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totals.ht)}</div></Card>
-        <Card><div className="text-xs text-muted">TVA</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totals.tva)}</div></Card>
+        <Card><div className="text-xs text-muted">À virer</div><div className="text-lg font-semibold tabular-nums text-warning">{formatEuros(somme(aVirer))}</div></Card>
+        <Card><div className="text-xs text-muted">Prélèvements à contrôler</div><div className="text-lg font-semibold tabular-nums">{formatEuros(somme(prelevements))}</div></Card>
         <Card><div className="text-xs text-muted">Total TTC</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totals.ttc)}</div></Card>
-        <Card><div className="text-xs text-muted">Reste à payer</div><div className="text-lg font-semibold text-warning">{formatEuros(totals.due)}</div></Card>
+        <Card><div className="text-xs text-muted">dont TVA</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totals.tva)}</div></Card>
       </div>
 
-      {bySupplier.length > 1 && (
-        <Card className="mb-4">
-          <div className="mb-2 text-sm font-medium">Par fournisseur</div>
-          <ul className="space-y-1 text-sm">
-            {bySupplier.map(([nom, ttc]) => (
-              <li key={nom} className="flex justify-between gap-2"><span className="truncate">{nom}</span><span className="tabular-nums">{formatEuros(ttc)}</span></li>
-            ))}
-          </ul>
-        </Card>
-      )}
+      <div className="mb-4 grid grid-cols-2 rounded-control border border-border bg-surface p-1 text-sm font-medium sm:inline-grid sm:w-96" role="tablist">
+        {(["paiements", "liste"] as const).map((v) => (
+          <button key={v} role="tab" aria-selected={vue === v} onClick={() => setVue(v)} className={`min-h-11 rounded-[10px] ${vue === v ? "bg-bar text-white" : "text-muted"}`}>
+            {v === "paiements" ? "Par fournisseur" : "Toutes les factures"}
+          </button>
+        ))}
+      </div>
 
       <ErrorBox message={error} />
       {loading ? (
         <p className="text-muted">Chargement…</p>
       ) : month.length === 0 ? (
         <Empty>Aucune facture pour ce mois.</Empty>
+      ) : vue === "paiements" ? (
+        <div className="space-y-6">
+          {aVirer.length > 0 && (
+            <section>
+              <h2 className="font-semibold">Virements à faire</h2>
+              <p className={`mb-2 text-sm ${somme(aVirer) > 0 && new Date().toISOString().slice(0, 10) > echeanceVirement(mois) ? "font-medium text-danger" : "text-muted"}`}>
+                À payer le {fr(echeanceVirement(mois))}
+                {somme(aVirer) > 0 && new Date().toISOString().slice(0, 10) > echeanceVirement(mois) ? " : en retard" : ""}.
+              </p>
+              <ul className="space-y-2">
+                {aVirer.map((g) => <li key={g.cle}><GroupeCard g={g} mois={mois} onOpen={setEditing} onFournisseur={setFournisseur} onRegler={regler} /></li>)}
+              </ul>
+            </section>
+          )}
+          {prelevements.length > 0 && (
+            <section>
+              <h2 className="mb-1 font-semibold">Prélèvements à contrôler</h2>
+              <p className="mb-2 text-sm text-muted">Comparés aux débits du relevé bancaire importé dans Caisse (du 1er du mois à la fin du mois suivant).</p>
+              <ul className="space-y-2">
+                {prelevements.map((g) => (
+                  <li key={g.cle}><GroupeCard g={g} mois={mois} banque={banque.items} onOpen={setEditing} onFournisseur={setFournisseur} onRegler={regler} /></li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
       ) : (
         <ul className="space-y-2">
           {month.map((i) => (
@@ -132,10 +168,182 @@ export default function FacturesPage() {
         </ul>
       )}
 
+      <Sheet open={fournisseur !== null} onClose={closeFournisseur} title="Fournisseur">
+        {fournisseur && <SupplierForm initial={fournisseur} onDone={closeFournisseur} />}
+      </Sheet>
       <Sheet open={editing !== null} onClose={close} title={editing === "new" ? "Nouvelle facture" : "Modifier la facture"}>
         {editing !== null && <InvoiceForm initial={editing === "new" ? null : editing} suppliers={suppliers.items} onDone={close} />}
       </Sheet>
     </div>
+  );
+}
+
+function Copier({ texte, label }: { texte: string; label: string }) {
+  const [ok, setOk] = useState(false);
+  return (
+    <button
+      type="button"
+      className="shrink-0 rounded-control border border-border px-3 py-2 text-xs font-medium"
+      onClick={async () => {
+        await navigator.clipboard?.writeText(texte);
+        setOk(true);
+        setTimeout(() => setOk(false), 1500);
+      }}
+    >
+      {ok ? "Copié" : label}
+    </button>
+  );
+}
+
+function GroupeCard({
+  g,
+  mois,
+  banque,
+  onOpen,
+  onFournisseur,
+  onRegler,
+}: {
+  g: GroupeFournisseur;
+  mois: string;
+  banque?: WithId<BankTransaction>[];
+  onOpen: (i: WithId<Invoice>) => void;
+  onFournisseur: (s: WithId<Supplier>) => void;
+  onRegler: (g: GroupeFournisseur, mode: ModePaiement) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const aPayer = g.factures.filter((f) => f.statut === "a_payer").length;
+  const fini = aPayer === 0;
+  const controle = banque ? controlerPrelevement(g, mois, banque) : null;
+  const reference = referenceVirement(mois, g.factures);
+
+  async function regler() {
+    const msg =
+      g.mode === "virement"
+        ? `Marquer ${aPayer} facture(s) de ${g.nom} comme payée(s) par un virement de ${formatEuros(g.reste)} ?`
+        : `Marquer le prélèvement de ${g.nom} (${formatEuros(g.reste)}) comme contrôlé ?`;
+    if (!confirm(msg)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onRegler(g, g.mode);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate font-semibold">{g.nom}</div>
+          <div className="text-sm text-muted">
+            {g.factures.length} facture{g.factures.length > 1 ? "s" : ""}
+            {g.litiges ? ` · ${g.litiges} en litige` : ""}
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          <div className="text-lg font-semibold tabular-nums">{formatEuros(fini ? g.total : g.reste)}</div>
+          {fini ? (
+            <Badge tone="green">{g.mode === "virement" ? "Payé" : "Contrôlé"}</Badge>
+          ) : controle ? (
+            <Badge tone={controle.etat === "ok" ? "green" : controle.etat === "ecart" ? "red" : "orange"}>
+              {controle.etat === "ok" ? "Montant OK" : controle.etat === "ecart" ? "Écart" : "Pas encore vu"}
+            </Badge>
+          ) : (
+            <Badge tone="orange">À virer</Badge>
+          )}
+        </div>
+      </div>
+
+      {!fini && g.mode === "virement" && (
+        <div className="space-y-2 rounded-control bg-surface-2 p-3 text-sm">
+          {g.supplier?.iban ? (
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate font-mono text-xs">{g.supplier.iban.replace(/(.{4})/g, "$1 ").trim()}</span>
+              <Copier texte={g.supplier.iban} label="Copier l'IBAN" />
+            </div>
+          ) : (
+            g.supplier && (
+              <button type="button" className="text-left underline" onClick={() => onFournisseur(g.supplier!)}>
+                Ajouter l&apos;IBAN du fournisseur
+              </button>
+            )
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-xs text-muted">{reference}</span>
+            <Copier texte={reference} label="Copier la référence" />
+          </div>
+        </div>
+      )}
+
+      {!fini && controle && (
+        <div className="rounded-control bg-surface-2 p-3 text-sm">
+          {controle.etat === "absent" ? (
+            <p>
+              Aucun prélèvement trouvé dans le relevé. Importe le relevé dans Caisse, ou règle le libellé bancaire du fournisseur
+              {g.supplier && (
+                <>
+                  {" "}
+                  (<button type="button" className="underline" onClick={() => onFournisseur(g.supplier!)}>modifier</button>)
+                </>
+              )}
+              .
+            </p>
+          ) : (
+            <>
+              <p>
+                Prélevé : <strong className="tabular-nums">{formatEuros(controle.preleve)}</strong> pour {formatEuros(g.total)} de factures
+                {controle.etat === "ecart" ? ` (écart ${controle.ecart > 0 ? "+" : ""}${formatEuros(controle.ecart)})` : ""}.
+              </p>
+              <ul className="mt-1 space-y-0.5 text-xs text-muted">
+                {controle.lignes.map((l) => (
+                  <li key={l.id} className="flex justify-between gap-2">
+                    <span className="truncate">{fr(l.date)} · {l.libelle}</span>
+                    <span className="shrink-0 tabular-nums">{formatEuros(-l.montant)}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+
+      <details className="text-sm">
+        <summary className="cursor-pointer select-none py-1 text-muted">Voir les factures</summary>
+        <ul className="mt-1 divide-y divide-border">
+          {g.factures.map((f) => (
+            <li key={f.id}>
+              <button className="flex min-h-11 w-full items-center justify-between gap-2 text-left" onClick={() => onOpen(f)}>
+                <span className="min-w-0 truncate">
+                  {fr(f.dateFacture)} · N° {f.numero || "—"}
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <span className="tabular-nums">{formatEuros(f.montantTTC)}</span>
+                  {f.statut !== "a_payer" && <Badge tone={STATUT[f.statut].tone}>{STATUT[f.statut].label}</Badge>}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </details>
+
+      <ErrorBox message={error} />
+      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+        {g.supplier && (
+          <Button variant="ghost" onClick={() => onFournisseur(g.supplier!)}>
+            {g.mode === "virement" ? "Passer en prélèvement…" : "Fiche fournisseur"}
+          </Button>
+        )}
+        {!fini && (
+          <Button variant={g.mode === "virement" ? "primary" : "secondary"} disabled={busy} onClick={regler}>
+            {g.mode === "virement" ? `Virement fait (${formatEuros(g.reste)})` : "Prélèvement contrôlé"}
+          </Button>
+        )}
+      </div>
+    </Card>
   );
 }
 
