@@ -20,7 +20,8 @@ import {
 import { RESTAURANT_IDS, type RestaurantId } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
 import { moisCle, parseConsommation, parseReglages } from "@/lib/reglages";
-import { extractFacture, extractUber, Lecteur } from "@/lib/server/extract";
+import { estReleve, extractFacture, extractUber, Lecteur, type ExtractedReleve } from "@/lib/server/extract";
+import { estCoherent, releveDocId, type Releve } from "@/lib/releves";
 import { getAttachment, getMessage, GoogleAuthError, listMessageIds, refreshAccessToken } from "@/lib/server/google";
 
 /**
@@ -39,6 +40,7 @@ export interface SyncResult {
   doublons: number; // factures déjà reçues ou saisies (même fournisseur, même numéro)
   erreurs: number;
   incomplet: boolean; // vrai si le temps imparti a été atteint : la suite au prochain passage
+  releves?: number; // relevés fournisseurs enregistrés
   lectures?: number; // PDF lus par Claude
   coutUsd?: number;
   limite?: "max" | "budget" | null; // lecture arrêtée par une limite des Réglages
@@ -72,6 +74,43 @@ interface Ctx {
   rules: MailRules;
   supplierByEmail: Map<string, string>;
   lecteur: Lecteur;
+  /** Relevés trouvés dans le mail : enregistrés à part, jamais comme factures. */
+  releves?: { releve: ExtractedReleve; nom: string; etablissement?: RestaurantId; source: InboxSource }[];
+}
+
+/**
+ * Enregistre un relevé fournisseur (document de contrôle). Clé = fournisseur + n° de relevé :
+ * un relevé renvoyé ou corrigé remplace le précédent.
+ */
+export async function enregistrerReleve(rid: RestaurantId, nom: string, x: ExtractedReleve, source: InboxSource): Promise<string> {
+  const db = adminDb();
+  const home = db.doc(`restaurants/${rid}`);
+  const suppliers = await home.collection("suppliers").get();
+  const sup = suppliers.docs.find((d) => String(d.get("nom") ?? "").toLowerCase() === nom.toLowerCase());
+  const mois = (x.periodeFin ?? x.dateReleve ?? source.receivedAt ?? new Date().toISOString()).slice(0, 7);
+  const id = releveDocId(nom, x.numero, x.periodeFin ? `${mois}` : source.messageId);
+  const ref = home.collection("releves").doc(id);
+  const avant = await ref.get();
+  const releve: Releve = {
+    fournisseur: nom.slice(0, 120),
+    ...(sup ? { supplierId: sup.id } : {}),
+    ...(x.numero ? { numero: x.numero.slice(0, 60) } : {}),
+    ...(x.dateReleve ? { dateReleve: x.dateReleve } : {}),
+    ...(x.periodeDebut ? { periodeDebut: x.periodeDebut } : {}),
+    ...(x.periodeFin ? { periodeFin: x.periodeFin } : {}),
+    mois,
+    ...(x.totalTTC !== undefined ? { totalTTC: x.totalTTC } : {}),
+    ...(x.soldeAnterieur !== undefined ? { soldeAnterieur: x.soldeAnterieur } : {}),
+    ...(x.netAPayer !== undefined ? { netAPayer: x.netAPayer } : {}),
+    ...(x.compteClient ? { compteClient: x.compteClient } : {}),
+    lignes: x.lignes,
+    coherent: estCoherent(x),
+    ...(avant.get("justifies") ? { justifies: avant.get("justifies") } : {}),
+    source: JSON.parse(JSON.stringify(source)),
+    createdAt: Date.now(),
+  };
+  await ref.set(releve);
+  return id;
 }
 
 /** Ajoute la dépense de la vérification au compteur du mois (settings/mail.consommation.AAAA-MM). */
@@ -155,6 +194,10 @@ async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "ube
     }
     const r = await extractFacture(await pdfData(token, msg, p), { from, subject, filename: p.filename }, ctx.lecteur);
     if (!r) continue; // PDF qui n'est pas une facture (CGV, bon de livraison…)
+    if (estReleve(r)) {
+      ctx.releves?.push({ releve: r, nom: known ?? r.fournisseur ?? base.fournisseur, etablissement, source: base.source });
+      continue;
+    }
     // Les valeurs écrites dans le mail priment (format fixe), le nom du fournisseur connu aussi (pour les doublons).
     items.push(finish({ ...base, ...r, ...fromText, fournisseur: known ?? r.fournisseur ?? base.fournisseur }));
   }
@@ -252,7 +295,12 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
       try {
         const msg = await getMessage(token, id);
         const kind = classify(msg, rules, supplierEmails);
-        const items = kind ? await itemsFor(token, msg, kind, { rules, supplierByEmail, lecteur }) : [];
+        const releves: NonNullable<Ctx["releves"]> = [];
+        const items = kind ? await itemsFor(token, msg, kind, { rules, supplierByEmail, lecteur, releves }) : [];
+        for (const x of releves) {
+          await enregistrerReleve(x.etablissement ?? rid, x.nom, x.releve, { ...x.source, boite: rid });
+          result.releves = (result.releves ?? 0) + 1;
+        }
         const now = Date.now();
         for (const [n, item] of items.entries()) {
           // Pièce qui concerne clairement l'autre restaurant : elle va dans son « À vérifier ».
@@ -269,7 +317,7 @@ export async function syncMail(rid: RestaurantId, { budgetMs = 240_000 }: { budg
             if ((e as { code?: number }).code !== 6) throw e; // 6 = déjà présent
           }
         }
-        if (!items.length) result.ignores++;
+        if (!items.length && !releves.length) result.ignores++;
         await home.collection("mailLog").doc(id).set({
           traiteLe: now,
           type: kind ?? "ignore",
@@ -375,6 +423,14 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000, 
             continue;
           }
           const r = await extractFacture(await pdfData(token, msg, pdf), { from, subject, filename: pdf.filename }, lecteur);
+          if (r && estReleve(r)) {
+            // Un « récapitulatif » pris pour une facture : il devient un relevé et sort de « À vérifier ».
+            await enregistrerReleve(item.kind === "facture" && item.etablissement ? item.etablissement : rid, item.fournisseur || r.fournisseur || "", r, item.source!);
+            await d.ref.update({ statut: "releve", relu: Date.now() });
+            out.relus++;
+            out.restants--;
+            continue;
+          }
           if (r) {
             const merged: InboxFacture = { ...r, ...dropEmpty(item), kind: "facture", source: item.source!, fournisseur: item.fournisseur || r.fournisseur || "" };
             const complete = merged.fournisseur && merged.dateFacture && merged.montantTTC !== undefined;

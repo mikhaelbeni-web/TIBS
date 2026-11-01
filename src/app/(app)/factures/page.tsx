@@ -10,6 +10,10 @@ import { formatEuros, toCents } from "@/lib/money";
 import { controlerPrelevement, echeanceVirement, grouperParFournisseur, referenceVirement, type GroupeFournisseur } from "@/lib/paiements";
 import type { BankTransaction, Invoice, ModePaiement, StatutFacture, Supplier, WithId } from "@/lib/types";
 import { SupplierForm } from "@/components/SupplierForm";
+import { ReleveBlock } from "@/components/ReleveBlock";
+import type { InboxDoc } from "@/lib/ingest";
+import type { Releve } from "@/lib/releves";
+import type { ReactNode } from "react";
 import { useCollection } from "@/lib/useCollection";
 
 const fr = (iso?: string) => (iso ? iso.split("-").reverse().join("/") : "");
@@ -26,6 +30,8 @@ export default function FacturesPage() {
   const suppliers = useCollection<Supplier>("suppliers", "nom");
   const [mois, setMois] = useState(thisMonth());
   const banque = useCollection<BankTransaction>("bankTransactions", "date", true);
+  const releves = useCollection<Releve>("releves", "mois", true);
+  const inbox = useCollection<InboxDoc>("inbox", "receivedAt", true);
   const [vue, setVue] = useState<"paiements" | "liste">("paiements");
   const [editing, setEditing] = useState<WithId<Invoice> | "new" | null>(null);
   const [fournisseur, setFournisseur] = useState<WithId<Supplier> | null>(null);
@@ -49,6 +55,26 @@ export default function FacturesPage() {
   const groupes = useMemo(() => grouperParFournisseur(month, suppliers.items), [month, suppliers.items]);
   const aVirer = groupes.filter((g) => g.mode === "virement");
   const prelevements = groupes.filter((g) => g.mode === "prelevement");
+  // Numéros de factures reçues par mail mais pas encore validées (pour « à valider dans À vérifier »).
+  const enAttente = useMemo(
+    () => inbox.items.filter((d) => d.statut === "a_verifier" && d.item.kind === "facture" && d.item.numero).map((d) => (d.item as { numero: string }).numero),
+    [inbox.items],
+  );
+  const relevesDuMois = useMemo(() => releves.items.filter((x) => x.mois === mois), [releves.items, mois]);
+  const nomCle = (n: string) => n.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const relevesDe = (g: { nom: string; supplier?: WithId<Supplier> }) =>
+    relevesDuMois.filter((x) => (x.supplierId && g.supplier ? x.supplierId === g.supplier.id : nomCle(x.fournisseur) === nomCle(g.nom)));
+  // Factures du fournisseur du mois précédent au mois suivant (factures à cheval sur deux mois).
+  const facturesAutour = (g: { nom: string; supplier?: WithId<Supplier> }) => {
+    const [y, m] = mois.split("-").map(Number);
+    const de = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
+    const a = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 7);
+    return items.filter((f) => f.mois >= de && f.mois <= a && (g.supplier ? f.supplierId === g.supplier.id : nomCle(f.supplierNom) === nomCle(g.nom)));
+  };
+  const blocsReleve = (g: GroupeFournisseur) =>
+    relevesDe(g).map((x) => <ReleveBlock key={x.id} releve={x} factures={facturesAutour(g)} enAttente={enAttente} mode={g.mode} onOpen={setEditing} />);
+  const relevesSeuls = relevesDuMois.filter((x) => !groupes.some((g) => relevesDe(g).some((y) => y.id === x.id)));
+
   const somme = (gs: GroupeFournisseur[]) => gs.reduce((t, g) => t + g.reste, 0);
 
   /** Marque payées toutes les factures « à payer » du groupe (un seul virement, ou prélèvement contrôlé). */
@@ -116,7 +142,7 @@ export default function FacturesPage() {
       <ErrorBox message={error} />
       {loading ? (
         <p className="text-muted">Chargement…</p>
-      ) : month.length === 0 ? (
+      ) : month.length === 0 && (vue === "liste" || relevesSeuls.length === 0) ? (
         <Empty>Aucune facture pour ce mois.</Empty>
       ) : vue === "paiements" ? (
         <div className="space-y-6">
@@ -128,7 +154,7 @@ export default function FacturesPage() {
                 {somme(aVirer) > 0 && new Date().toISOString().slice(0, 10) > echeanceVirement(mois) ? " : en retard" : ""}.
               </p>
               <ul className="space-y-2">
-                {aVirer.map((g) => <li key={g.cle}><GroupeCard g={g} mois={mois} onOpen={setEditing} onFournisseur={setFournisseur} onRegler={regler} /></li>)}
+                {aVirer.map((g) => <li key={g.cle}><GroupeCard g={g} mois={mois} onOpen={setEditing} onFournisseur={setFournisseur} onRegler={regler}>{blocsReleve(g)}</GroupeCard></li>)}
               </ul>
             </section>
           )}
@@ -138,8 +164,27 @@ export default function FacturesPage() {
               <p className="mb-2 text-sm text-muted">Comparés aux débits du relevé bancaire importé dans Caisse (du 1er du mois à la fin du mois suivant).</p>
               <ul className="space-y-2">
                 {prelevements.map((g) => (
-                  <li key={g.cle}><GroupeCard g={g} mois={mois} banque={banque.items} onOpen={setEditing} onFournisseur={setFournisseur} onRegler={regler} /></li>
+                  <li key={g.cle}><GroupeCard g={g} mois={mois} banque={banque.items} onOpen={setEditing} onFournisseur={setFournisseur} onRegler={regler}>{blocsReleve(g)}</GroupeCard></li>
                 ))}
+              </ul>
+            </section>
+          )}
+          {relevesSeuls.length > 0 && (
+            <section>
+              <h2 className="mb-1 font-semibold">Relevés sans facture saisie ce mois</h2>
+              <p className="mb-2 text-sm text-muted">Le fournisseur liste des factures que tu n&apos;as pas encore validées.</p>
+              <ul className="space-y-2">
+                {relevesSeuls.map((x) => {
+                  const g = { nom: x.fournisseur, supplier: suppliers.items.find((s) => s.id === x.supplierId) };
+                  return (
+                    <li key={x.id}>
+                      <Card className="space-y-2">
+                        <div className="font-semibold">{x.fournisseur}</div>
+                        <ReleveBlock releve={x} factures={facturesAutour(g)} enAttente={enAttente} mode={g.supplier?.paiement ?? "virement"} onOpen={setEditing} />
+                      </Card>
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           )}
@@ -202,7 +247,9 @@ function GroupeCard({
   onOpen,
   onFournisseur,
   onRegler,
+  children,
 }: {
+  children?: ReactNode;
   g: GroupeFournisseur;
   mois: string;
   banque?: WithId<BankTransaction>[];
@@ -310,6 +357,8 @@ function GroupeCard({
           )}
         </div>
       )}
+
+      {children}
 
       <details className="text-sm">
         <summary className="cursor-pointer select-none py-1 text-muted">Voir les factures</summary>

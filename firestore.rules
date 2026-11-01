@@ -62,6 +62,13 @@ service cloud.firestore {
           && request.resource.data.especes is int;
       }
 
+      // Relevés fournisseurs : écrits par le serveur ; le gérant peut seulement justifier un écart.
+      match /releves/{id} {
+        allow read, delete: if gerantDe(rid);
+        allow update: if gerantDe(rid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["justifies"]);
+      }
+
       match /bankTransactions/{id} {
         allow read, delete: if gerantDe(rid);
         allow create, update: if gerantDe(rid)

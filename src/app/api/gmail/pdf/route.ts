@@ -4,7 +4,7 @@ import { getAttachment, getMessage, GoogleAuthError } from "@/lib/server/google"
 import { jetonBoite } from "@/lib/server/mailSync";
 import { restaurant } from "@/lib/restaurants";
 import { pdfAttachments } from "@/lib/mail";
-import type { InboxItem } from "@/lib/ingest";
+import type { InboxItem, InboxSource } from "@/lib/ingest";
 
 const err = (status: number, error: string) => Response.json({ error }, { status });
 
@@ -17,22 +17,24 @@ export async function POST(request: Request) {
   if (uid instanceof Response) return uid;
   const rid = restaurantParam(request);
   if (rid instanceof Response) return rid;
-  const id = new URL(request.url).searchParams.get("i") ?? "";
+  const params = new URL(request.url).searchParams;
+  const id = params.get("i") ?? "";
+  const releve = params.get("c") === "releve";
   if (!/^[A-Za-z0-9_-]{1,140}$/.test(id)) return err(400, "Élément inconnu.");
 
   const home = adminDb().doc(`restaurants/${rid}`);
-  const snap = await home.collection("inbox").doc(id).get();
-  const item = snap.get("item") as InboxItem | undefined;
-  const messageId = item?.source?.messageId;
-  if (!messageId) return err(404, "Élément introuvable.");
-  const boite = item.source?.boite ?? rid;
+  const snap = await home.collection(releve ? "releves" : "inbox").doc(id).get();
+  const source = (releve ? snap.get("source") : (snap.get("item") as InboxItem | undefined)?.source) as InboxSource | undefined;
+  const messageId = source?.messageId;
+  if (!source || !messageId) return err(404, "Élément introuvable.");
+  const boite = source.boite ?? rid;
 
   try {
     const token = await jetonBoite(boite);
     if (!token) return err(409, `Boîte Gmail ${restaurant(boite).court} non connectée.`);
     const msg = await getMessage(token, messageId);
     const pdfs = pdfAttachments(msg);
-    const pdf = pdfs.find((p) => p.filename === item.source?.attachment) ?? pdfs[0];
+    const pdf = pdfs.find((p) => p.filename === source.attachment) ?? pdfs[0];
     if (!pdf) return err(404, "Ce mail n'a pas de PDF.");
     const b64 = pdf.data ? Buffer.from(pdf.data, "base64url").toString("base64") : await getAttachment(token, messageId, pdf.attachmentId!);
     const name = pdf.filename.replace(/[^\w.\- ]/g, "_");
