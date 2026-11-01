@@ -446,7 +446,7 @@ function amountOf(item: InboxItem) {
 }
 
 /** Éléments ignorés : on peut les remettre dans « À vérifier » en cas d'erreur. */
-function Ignores({ items, mailbox }: { items: (InboxDoc & { id: string })[]; mailbox?: string }) {
+function Ignores({ items, mailbox, onTraiter }: { items: (InboxDoc & { id: string })[]; mailbox?: string; onTraiter: (id: string) => void }) {
   const { rid } = useRestaurant();
   const { user } = useAuth();
   const [busy, setBusy] = useState<string | null>(null);
@@ -468,13 +468,17 @@ function Ignores({ items, mailbox }: { items: (InboxDoc & { id: string })[]; mai
 
   const tries = [...items].sort((a, b) => (b.traiteLe ?? 0) - (a.traiteLe ?? 0)).slice(0, 50);
   return (
-    <details className="mt-6">
-      <summary className="flex min-h-11 cursor-pointer items-center text-sm font-semibold">Ignorés ({items.length}) · ignorés par erreur ? Remets-les à vérifier</summary>
+    <details className="group mt-8 border-t border-border pt-3">
+      <summary className="mx-auto flex min-h-11 w-fit cursor-pointer list-none items-center rounded-control [&::-webkit-details-marker]:hidden px-3 text-sm text-muted underline underline-offset-4">
+        <span className="group-open:hidden">Lignes ignorées ({items.length})</span>
+        <span className="hidden group-open:inline">Masquer les lignes ignorées</span>
+      </summary>
+      <p className="mt-2 text-xs text-muted">Ignorée par erreur ? Remets-la dans la liste, ou traite-la directement.</p>
       <ErrorBox message={error} />
       <ul className="mt-2 space-y-2">
         {tries.map((d) => (
           <li key={d.id}>
-            <Card className="flex items-center justify-between gap-2">
+            <Card className="space-y-2">
               <div className="min-w-0">
                 <div className="truncate font-semibold">{d.item.kind === "facture" ? d.item.fournisseur : "Versement Uber Eats"}</div>
                 <div className="truncate text-xs text-muted">
@@ -483,9 +487,14 @@ function Ignores({ items, mailbox }: { items: (InboxDoc & { id: string })[]; mai
                 <div className="text-xs text-muted">{amountOf(d.item)}{d.traiteLe ? ` · ignoré le ${new Date(d.traiteLe).toLocaleDateString("fr-FR")}` : ""}</div>
                 <Boite boite={d.item.source.boite} adresse={d.item.source.boite === rid ? mailbox : undefined} className="mt-1" />
               </div>
-              <Button variant="secondary" className="shrink-0 px-3 text-sm" disabled={busy !== null} onClick={() => restaurer(d.id)}>
-                {busy === d.id ? "…" : "Remettre à vérifier"}
-              </Button>
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="secondary" className="text-sm" disabled={busy !== null} onClick={() => restaurer(d.id)}>
+                  {busy === d.id ? "…" : "Remettre à vérifier"}
+                </Button>
+                <Button className="text-sm" disabled={busy !== null} onClick={() => onTraiter(d.id)}>
+                  Traiter
+                </Button>
+              </div>
             </Card>
           </li>
         ))}
@@ -515,7 +524,7 @@ function AVerifier() {
   const jours = todo.map(jourRecu).filter(Boolean).sort();
   const horsPeriode = enAttente.length - todo.length;
   const ignores = useMemo(() => inbox.items.filter((i) => i.statut === "rejete"), [inbox.items]);
-  const current = todo.find((i) => i.id === open);
+  const current = inbox.items.find((i) => i.id === open && (i.statut === "a_verifier" || i.statut === "rejete"));
   const close = useCallback(() => setOpen(null), []);
 
   useEffect(() => onSnapshot(doc(db(), "restaurants", rid, "settings", "mail"), (s) => setMailbox(s.get("adresse") as string | undefined), () => {}), [rid]);
@@ -571,7 +580,7 @@ function AVerifier() {
           ))}
         </ul>
       )}
-      <Ignores items={ignores} mailbox={mailbox} />
+      <Ignores items={ignores} mailbox={mailbox} onTraiter={setOpen} />
       {current && <ReviewSheet key={`${current.id}-${current.relu ?? 0}`} id={current.id} d={current} mailbox={mailbox} onClose={close} />}
     </div>
   );
