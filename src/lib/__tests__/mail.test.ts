@@ -67,6 +67,10 @@ describe("mail", () => {
     expect(classify(msg("Metro <f@metro.fr>", "Votre facture n°123", ["doc.pdf"]), rules, [])).toBe("facture");
     expect(classify(msg("Metro <f@metro.fr>", "Document", ["FAC_2026_10.pdf"]), rules, [])).toBe("facture");
     expect(classify(msg("Boucherie <b@boucher.fr>", "Octobre", ["releve.pdf"]), rules, ["b@boucher.fr"])).toBe("facture");
+    // Relevé mensuel d'un fournisseur connu : gardé pour la lecture IA ; d'un inconnu ou sans PDF : écarté.
+    expect(classify(msg("HPS <comptabilite@hpsrungis.com>", "Relevé de compte octobre 2026", ["releve.pdf"]), rules, [])).toBe("facture");
+    expect(classify(msg("HPS <comptabilite@hpsrungis.com>", "Relevé de compte octobre 2026", []), rules, [])).toBeNull();
+    expect(classify(msg("Inconnu <x@inconnu.fr>", "Relevé facture", ["releve.pdf"]), rules, [])).toBeNull();
     expect(classify(msg("Ami <a@gmail.com>", "Photos", ["vacances.pdf"]), rules, [])).toBeNull();
     expect(classify(msg("Metro <f@metro.fr>", "Votre facture", []), rules, [])).toBeNull();
     expect(classify(msg("Julien <compta1@jds-associes.com>", "Factures manquantes AVA", ["liste.pdf"]), rules, [])).toBeNull();
