@@ -61,4 +61,24 @@ run("relireIncomplets (émulateur)", () => {
     expect(item).toMatchObject({ fournisseur: "Halles Paris Sud", numero: "FAC-1", dateFacture: "2026-10-09", montantTTC: 10550, montantTVA: 550 });
     expect(item.incomplet).toBeUndefined();
   });
+
+  it("note « pas une facture », ne la relit plus seule, sauf à la demande", async () => {
+    const { adminDb } = await import("../admin");
+    const { relireIncomplets } = await import("../mailSync");
+    const { extractFacture } = await import("../extract");
+    const db = adminDb();
+    const ref = db.doc("restaurants/19e/inbox/r1_0");
+    await ref.set({
+      statut: "a_verifier",
+      receivedAt: 1,
+      item: { kind: "facture", fournisseur: "X", incomplet: true, lecture: "limite", source: { messageId: "r1", attachment: "FAC-1.pdf" } },
+    });
+    vi.mocked(extractFacture).mockResolvedValueOnce(null);
+    expect(await relireIncomplets("19e")).toMatchObject({ relus: 1, completes: 0 });
+    expect((await ref.get()).get("item.lecture")).toBe("pas_facture");
+
+    expect(await relireIncomplets("19e")).toMatchObject({ relus: 0, restants: 0 });
+    expect(await relireIncomplets("19e", { ids: ["r1_0"] })).toMatchObject({ relus: 1, completes: 1 });
+    expect((await ref.get()).get("item.lecture")).toBeUndefined();
+  });
 });

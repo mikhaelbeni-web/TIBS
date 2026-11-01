@@ -73,6 +73,23 @@ async function api(user: { getIdToken: () => Promise<string> }, path: string) {
   return json;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function texteRelu(r: any, bouton = false) {
+  if (!r.relus && !r.restants) return bouton ? "Aucun PDF à lire : tout est déjà rempli." : "";
+  const limite = r.limite === "budget" ? " Budget du mois atteint (voir Réglages)." : r.limite === "max" ? " Limite de PDF par passage atteinte : relance pour continuer." : "";
+  const cout = typeof r.coutUsd === "number" && r.coutUsd > 0 ? ` Coût : ${r.coutUsd.toFixed(2).replace(".", ",")} $.` : "";
+  return `PDF lus par l'IA : ${r.relus}, dont ${r.completes} rempli(s).${r.restants ? ` Encore ${r.restants} à compléter.` : ""}${limite}${cout}`;
+}
+
+const RAISON_LECTURE: Record<string, string> = {
+  limite: "PDF pas encore lu : la limite de PDF par relevé était atteinte. Touche « Lire ce PDF avec l'IA ».",
+  budget: "PDF pas lu : le budget IA du mois est atteint (voir Réglages).",
+  desactivee: "PDF pas lu : la lecture par l'IA est coupée (voir Réglages).",
+  pas_facture: "L'IA n'a pas reconnu une facture dans ce PDF. Vérifie avec « Voir la facture ».",
+  pas_de_pdf: "Aucun PDF lisible dans ce mail.",
+  erreur: "La lecture par l'IA a échoué.",
+};
+
 /** Carte « Boîte mail » : connexion Gmail, dernier relevé, bouton pour relever tout de suite. */
 function MailCard() {
   const { rid, current, setRid } = useRestaurant();
@@ -86,13 +103,13 @@ function MailCard() {
     if (isRestaurantId(retourRid) && retourRid !== rid) setRid(retourRid);
   }, [retourRid, rid, setRid]);
   const [status, setStatus] = useState<MailStatus | null>(null);
-  const [busy, setBusy] = useState<"connect" | "sync" | "disconnect" | null>(null);
+  const [busy, setBusy] = useState<"connect" | "sync" | "lire" | "disconnect" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
   useEffect(() => onSnapshot(doc(db(), "restaurants", rid, "settings", "mail"), (s) => setStatus((s.data() as MailStatus) ?? {}), (e) => setError(e.message)), [rid]);
 
-  async function run(kind: "connect" | "sync" | "disconnect") {
+  async function run(kind: "connect" | "sync" | "lire" | "disconnect") {
     if (!user) return;
     setBusy(kind);
     setError(null);
@@ -103,6 +120,11 @@ function MailCard() {
         window.location.assign(url);
         return;
       }
+      if (kind === "lire") {
+        const { relu } = await api(user, `/api/gmail/sync?r=${rid}&mode=lire`);
+        setInfo(relu.status === "ok" ? texteRelu(relu, true) : relu.message);
+        return;
+      }
       if (kind === "disconnect" && !confirm("Déconnecter la boîte mail ? Les relevés automatiques s'arrêtent.")) return;
       const r = await api(user, `/api/gmail/${kind === "sync" ? "sync" : "disconnect"}?r=${rid}`);
       if (kind === "sync") {
@@ -111,9 +133,7 @@ function MailCard() {
             ? `${r.messagesVus} mail(s) lu(s), ${r.nouveaux} élément(s) ajouté(s).${r.incomplet ? " Il en reste : relance pour continuer." : ""}`
             : r.message,
         );
-        if (r.relu?.status === "ok" && r.relu.relus) {
-          setInfo((i) => `${i ?? ""} PDF relus : ${r.relu.relus}, dont ${r.relu.completes} complété(s).${r.relu.restants ? ` Encore ${r.relu.restants} à compléter.` : ""}`.trim());
-        }
+        if (r.relu?.status === "ok" && r.relu.relus) setInfo((i) => `${i ?? ""} ${texteRelu(r.relu)}`.trim());
       }
     } catch (e) {
       setError((e as Error).message);
@@ -145,12 +165,15 @@ function MailCard() {
       <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
         {connected ? (
           <>
-            <Button variant="ghost" disabled={busy !== null} onClick={() => run("disconnect")}>Déconnecter</Button>
             {status?.erreur ? (
-              <Button disabled={busy !== null} onClick={() => run("connect")}>Reconnecter</Button>
+              <Button className="col-span-2" disabled={busy !== null} onClick={() => run("connect")}>Reconnecter</Button>
             ) : (
-              <Button disabled={busy !== null} onClick={() => run("sync")}>{busy === "sync" ? "Relevé en cours…" : "Vérifier maintenant"}</Button>
+              <>
+                <Button disabled={busy !== null} onClick={() => run("sync")}>{busy === "sync" ? "Relevé en cours…" : "Relever les mails"}</Button>
+                <Button variant="secondary" disabled={busy !== null} onClick={() => run("lire")}>{busy === "lire" ? "Lecture en cours…" : "Lire les PDF avec l'IA"}</Button>
+              </>
             )}
+            <Button variant="ghost" className="col-span-2 sm:order-first" disabled={busy !== null} onClick={() => run("disconnect")}>Déconnecter</Button>
           </>
         ) : (
           <Button className="col-span-2" disabled={busy !== null || !status} onClick={() => run("connect")}>Connecter Gmail</Button>
@@ -333,6 +356,23 @@ function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mai
     }
   }
 
+  const { user } = useAuth();
+  const [lecture, setLecture] = useState(false);
+  async function lireIA() {
+    if (!user) return;
+    setLecture(true);
+    setError(null);
+    try {
+      const { relu } = await api(user, `/api/gmail/sync?r=${rid}&mode=lire&i=${encodeURIComponent(id)}`);
+      if (relu.status !== "ok") setError(relu.message ?? "Lecture impossible.");
+      // Le document mis à jour arrive par l'écoute Firestore : la fiche se recharge (clé = relu).
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLecture(false);
+    }
+  }
+
   const facture = d.item.kind === "facture";
   const boite = d.item.source.boite;
   const adresseBoite = !boite || boite === rid ? mailbox : restaurant(boite).boiteMail;
@@ -351,7 +391,19 @@ function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mai
             </a>
           </div>
         </div>
-        {d.item.incomplet && <p className="rounded-control bg-warning-soft p-3 text-sm">Lecture automatique incomplète : vérifie et complète avec le PDF.</p>}
+        {(d.item.incomplet || d.item.lecture) && (
+          <div className="space-y-2 rounded-control bg-warning-soft p-3 text-sm">
+            <p>
+              {(d.item.lecture && RAISON_LECTURE[d.item.lecture]) || "Lecture automatique incomplète : vérifie et complète avec le PDF."}
+              {d.item.lectureErreur ? ` (${d.item.lectureErreur})` : ""}
+            </p>
+            {d.item.source.attachment && (
+              <Button variant="secondary" className="w-full" disabled={lecture} onClick={lireIA}>
+                {lecture ? "Lecture en cours…" : "Lire ce PDF avec l'IA"}
+              </Button>
+            )}
+          </div>
+        )}
         {facture ? (
           <>
             <Field label="Fournisseur"><Input value={f.fournisseur} onChange={set("fournisseur")} /></Field>
@@ -443,7 +495,7 @@ function AVerifier() {
           ))}
         </ul>
       )}
-      {current && <ReviewSheet key={current.id} id={current.id} d={current} mailbox={mailbox} onClose={close} />}
+      {current && <ReviewSheet key={`${current.id}-${current.relu ?? 0}`} id={current.id} d={current} mailbox={mailbox} onClose={close} />}
     </div>
   );
 }

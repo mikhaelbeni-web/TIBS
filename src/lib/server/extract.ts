@@ -28,6 +28,12 @@ export class Lecteur {
     private readonly depenseMoisUsd = 0,
   ) {}
 
+  /** Raison à noter sur un élément non lu. */
+  get raison(): "limite" | "budget" | "desactivee" {
+    if (!this.actif) return "desactivee";
+    return this.limite === "budget" ? "budget" : "limite";
+  }
+
   get actif() {
     return extractionEnabled() && this.reglages.lecturePdf;
   }
@@ -56,7 +62,11 @@ export class Lecteur {
 }
 
 const FactureSchema = z.object({
-  est_facture: z.boolean().describe("true si le document est une facture ou un avoir adressé au restaurant"),
+  est_facture: z
+    .boolean()
+    .describe(
+      "true si le document est une facture, un avoir, ou un relevé / récapitulatif mensuel de factures à payer adressé au restaurant (pour un récapitulatif : numéro et date du relevé, totaux à payer)",
+    ),
   avoir: z.boolean().describe("true si c'est un avoir (note de crédit)"),
   fournisseur: z.string().describe("raison sociale du fournisseur qui émet la facture"),
   numero: z.string().describe("numéro de facture, chaîne vide si absent"),
