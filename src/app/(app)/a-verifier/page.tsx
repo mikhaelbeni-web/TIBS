@@ -19,6 +19,57 @@ const euros = (c?: number) => (c === undefined ? "" : (c / 100).toFixed(2).repla
 const gmailLink = (id: string, mailbox?: string) =>
   `https://mail.google.com/mail/${mailbox ? `?authuser=${encodeURIComponent(mailbox)}` : ""}#all/${id}`;
 
+/** Jour de réception du mail (heure de Paris), AAAA-MM-JJ. */
+function jourRecu(d: InboxDoc): string {
+  const t = d.item.source.receivedAt ? Date.parse(d.item.source.receivedAt) : d.receivedAt;
+  return Number.isFinite(t) ? new Date(t).toLocaleDateString("en-CA", { timeZone: "Europe/Paris" }) : "";
+}
+
+const isoJour = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "Europe/Paris" });
+
+/** Raccourcis de période : bornes AAAA-MM-JJ calculées au moment du clic. */
+function raccourcis(): { label: string; du: string; au: string }[] {
+  const auj = new Date();
+  const [y, m] = isoJour(auj).split("-").map(Number);
+  const debut = (yy: number, mm: number) => `${yy}-${String(mm).padStart(2, "0")}-01`;
+  const finMois = (yy: number, mm: number) => isoJour(new Date(Date.UTC(yy, mm, 0, 12)));
+  const pm = m === 1 ? 12 : m - 1;
+  const py = m === 1 ? y - 1 : y;
+  return [
+    { label: "Ce mois-ci", du: debut(y, m), au: isoJour(auj) },
+    { label: "Mois dernier", du: debut(py, pm), au: finMois(py, pm) },
+    { label: "30 derniers jours", du: isoJour(new Date(auj.getTime() - 29 * 86_400_000)), au: isoJour(auj) },
+  ];
+}
+
+/** Bandeau de période, en haut de la page : filtre la liste et limite « Relever ». */
+function PeriodeBar({ du, au, onChange }: { du: string; au: string; onChange: (du: string, au: string) => void }) {
+  const choix = raccourcis();
+  return (
+    <Card className="mb-4 space-y-3">
+      <div className="font-semibold">Période des mails</div>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Reçus du">
+          <Input type="date" value={du} max={au || undefined} onChange={(e) => onChange(e.target.value, au)} />
+        </Field>
+        <Field label="au">
+          <Input type="date" value={au} min={du || undefined} onChange={(e) => onChange(du, e.target.value)} />
+        </Field>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {choix.map((c) => (
+          <Button key={c.label} variant={c.du === du && c.au === au ? "primary" : "secondary"} className="min-h-11 px-3 text-sm" onClick={() => onChange(c.du, c.au)}>
+            {c.label}
+          </Button>
+        ))}
+        <Button variant={!du && !au ? "primary" : "ghost"} className="min-h-11 px-3 text-sm" onClick={() => onChange("", "")}>
+          Toutes les dates
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 /** Boîte Gmail d'où vient l'élément : pastille de couleur du restaurant + adresse. */
 function Boite({ boite, adresse, className = "" }: { boite?: RestaurantId; adresse?: string; className?: string }) {
   if (!boite) return null;
@@ -92,7 +143,7 @@ const RAISON_LECTURE: Record<string, string> = {
 };
 
 /** Carte « Boîte mail » : connexion Gmail, dernier relevé, bouton pour relever tout de suite. */
-function MailCard() {
+function MailCard({ du, au }: { du: string; au: string }) {
   const { rid, current, setRid } = useRestaurant();
   const { user } = useAuth();
   const params = useSearchParams();
@@ -107,9 +158,6 @@ function MailCard() {
   const [busy, setBusy] = useState<"connect" | "sync" | "lire" | "disconnect" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
-  const [periode, setPeriode] = useState(false);
-  const [du, setDu] = useState("");
-  const [au, setAu] = useState("");
 
   useEffect(() => onSnapshot(doc(db(), "restaurants", rid, "settings", "mail"), (s) => setStatus((s.data() as MailStatus) ?? {}), (e) => setError(e.message)), [rid]);
 
@@ -129,9 +177,9 @@ function MailCard() {
         setInfo(relu.status === "ok" ? texteRelu(relu, true) : relu.message);
         return;
       }
-      if (kind === "sync" && periode && (!du || !au)) throw new Error("Choisis une date de début et une date de fin, ou retire la période.");
+      if (kind === "sync" && Boolean(du) !== Boolean(au)) throw new Error("Choisis la date de début et la date de fin, ou touche « Toutes les dates ».");
       if (kind === "disconnect" && !confirm("Déconnecter la boîte mail ? Les relevés automatiques s'arrêtent.")) return;
-      const filtre = kind === "sync" && periode ? `&du=${du}&au=${au}` : "";
+      const filtre = kind === "sync" && du && au ? `&du=${du}&au=${au}` : "";
       const r = await api(user, `/api/gmail/${kind === "sync" ? "sync" : "disconnect"}?r=${rid}${filtre}`);
       if (kind === "sync") {
         setInfo(
@@ -165,30 +213,18 @@ function MailCard() {
           {status?.dernierResultat && status.dernierResultat.lecturePdf === false ? " Lecture des PDF désactivée : montants à saisir." : ""}
         </p>
       )}
+      {connected && !status?.erreur && (
+        <p className="text-sm">
+          {du && au ? (
+            <>« Relever cette période » cherche dans Gmail les mails reçus <strong>du {fr(du)} au {fr(au)}</strong>, y compris ceux écartés avant.</>
+          ) : (
+            <>« Relever les nouveaux mails » cherche les mails arrivés depuis le dernier relevé. Choisis une période en haut pour chercher plus loin.</>
+          )}
+        </p>
+      )}
       {retour && RETOUR_GMAIL[retour] && <p className="rounded-control bg-info-soft p-3 text-sm">{RETOUR_GMAIL[retour]}</p>}
       {info && <p className="rounded-control bg-success-soft p-3 text-sm">{info}</p>}
       <ErrorBox message={error || status?.erreur || null} />
-      {connected && !status?.erreur && (
-        <div className="space-y-2">
-          <label className="flex min-h-11 items-center gap-2 text-sm">
-            <input type="checkbox" className="size-5" checked={periode} onChange={(e) => setPeriode(e.target.checked)} disabled={busy !== null} />
-            Relever une période précise
-          </label>
-          {periode && (
-            <>
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Du">
-                  <Input type="date" value={du} max={au || undefined} onChange={(e) => setDu(e.target.value)} />
-                </Field>
-                <Field label="Au">
-                  <Input type="date" value={au} min={du || undefined} onChange={(e) => setAu(e.target.value)} />
-                </Field>
-              </div>
-              <p className="text-xs text-muted">Les mails de cette période déjà écartés sont réexaminés avec les règles actuelles. Ceux déjà ajoutés ne sont pas dupliqués.</p>
-            </>
-          )}
-        </div>
-      )}
       <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
         {connected ? (
           <>
@@ -196,7 +232,7 @@ function MailCard() {
               <Button className="col-span-2" disabled={busy !== null} onClick={() => run("connect")}>Reconnecter</Button>
             ) : (
               <>
-                <Button disabled={busy !== null} onClick={() => run("sync")}>{busy === "sync" ? "Relevé en cours…" : "Relever les mails"}</Button>
+                <Button disabled={busy !== null} onClick={() => run("sync")}>{busy === "sync" ? "Relevé en cours…" : du && au ? "Relever cette période" : "Relever les nouveaux mails"}</Button>
                 <Button variant="secondary" disabled={busy !== null} onClick={() => run("lire")}>{busy === "lire" ? "Lecture en cours…" : "Lire les PDF avec l'IA"}</Button>
               </>
             )}
@@ -415,7 +451,19 @@ function AVerifier() {
   const inbox = useCollection<InboxDoc>("inbox", "receivedAt", true);
   const [open, setOpen] = useState<string | null>(null);
   const [mailbox, setMailbox] = useState<string | undefined>();
-  const todo = useMemo(() => inbox.items.filter((i) => i.statut === "a_verifier"), [inbox.items]);
+  const [du, setDu] = useState("");
+  const [au, setAu] = useState("");
+  const enAttente = useMemo(() => inbox.items.filter((i) => i.statut === "a_verifier"), [inbox.items]);
+  const todo = useMemo(
+    () =>
+      enAttente.filter((i) => {
+        const j = jourRecu(i);
+        return (!du || (j !== "" && j >= du)) && (!au || (j !== "" && j <= au));
+      }),
+    [enAttente, du, au],
+  );
+  const jours = todo.map(jourRecu).filter(Boolean).sort();
+  const horsPeriode = enAttente.length - todo.length;
   const current = todo.find((i) => i.id === open);
   const close = useCallback(() => setOpen(null), []);
 
@@ -424,15 +472,26 @@ function AVerifier() {
   return (
     <div>
       <PageHeader title="À vérifier" />
-      <MailCard />
-      <p className="mb-4 text-sm text-muted">
-        Factures et versements Uber trouvés dans les mails. Touche un élément pour le vérifier : une fois validé, il passe dans Factures ou Caisse &gt; Uber.
-      </p>
+      <PeriodeBar du={du} au={au} onChange={(a, b) => (setDu(a), setAu(b))} />
+      <MailCard du={du} au={au} />
+      <div className="mb-3 rounded-control bg-info-soft p-3 text-sm">
+        <div className="font-semibold">
+          {todo.length} élément{todo.length > 1 ? "s" : ""} à vérifier
+          {du && au ? ` · mails reçus du ${fr(du)} au ${fr(au)}` : " · toutes les dates"}
+        </div>
+        {jours.length > 0 && (
+          <div className="text-muted">
+            Le plus ancien reçu le {fr(jours[0])}, le plus récent le {fr(jours[jours.length - 1])}.
+          </div>
+        )}
+        {horsPeriode > 0 && <div className="text-muted">{horsPeriode} autre(s) en attente hors de cette période.</div>}
+      </div>
+      <p className="mb-4 text-sm text-muted">Touche un élément pour le vérifier : une fois validé, il passe dans Factures ou Caisse &gt; Uber.</p>
       <ErrorBox message={inbox.error} />
       {inbox.loading ? (
         <p className="text-muted">Chargement…</p>
       ) : todo.length === 0 ? (
-        <Empty>Rien à vérifier.</Empty>
+        <Empty>{du && au ? "Rien à vérifier sur cette période." : "Rien à vérifier."}</Empty>
       ) : (
         <ul className="space-y-2">
           {todo.map(({ id, ...d }) => (
@@ -446,7 +505,9 @@ function AVerifier() {
                         ? [d.item.numero && `N° ${d.item.numero}`, fr(d.item.dateFacture)].filter(Boolean).join(" · ")
                         : [fr(d.item.date), d.item.reference].filter(Boolean).join(" · ")}
                     </div>
-                    <div className="truncate text-xs text-muted">{d.item.source.subject}</div>
+                    <div className="truncate text-xs text-muted">
+                      <span className="font-medium text-ink">Reçu le {fr(jourRecu(d as InboxDoc)) || "?"}</span> · {d.item.source.subject}
+                    </div>
                     <Boite boite={d.item.source.boite} adresse={d.item.source.boite === rid ? mailbox : undefined} className="mt-1" />
                   </div>
                   <div className="shrink-0 text-right">
