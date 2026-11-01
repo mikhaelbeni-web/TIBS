@@ -34,6 +34,22 @@ export async function GET() {
       out.base_de_donnees = `erreur : ${(e as Error).message}`;
     }
   }
+  // Chargement du module d'authentification (sert à vérifier la session du gérant).
+  out.authentification = "non testée";
+  if (out.FIREBASE_SERVICE_ACCOUNT === "ok") {
+    try {
+      const { getAuth } = await import("firebase-admin/auth");
+      const { adminApp } = await import("@/lib/server/admin");
+      await getAuth(adminApp())
+        .verifyIdToken("test")
+        .catch((e: { code?: string; message?: string }) => {
+          if (e.code !== "auth/argument-error") throw e;
+        });
+      out.authentification = "ok";
+    } catch (e) {
+      out.authentification = `erreur : ${(e as Error).message}`;
+    }
+  }
   const toutOk = Object.values(out).every((v) => v === "ok");
   return Response.json({ toutOk, ...out }, { headers: { "cache-control": "no-store" } });
 }

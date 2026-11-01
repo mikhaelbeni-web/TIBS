@@ -1,5 +1,4 @@
 import "server-only";
-import { getAuth } from "firebase-admin/auth";
 import { isRestaurantId, type RestaurantId } from "@/lib/restaurants";
 import { adminApp, adminDb } from "@/lib/server/admin";
 
@@ -7,19 +6,27 @@ import { adminApp, adminDb } from "@/lib/server/admin";
 export async function requireGerant(request: Request): Promise<string | Response> {
   const m = (request.headers.get("authorization") ?? "").match(/^Bearer (.+)$/);
   if (!m) return Response.json({ error: "non connecté" }, { status: 401 });
-  let app;
+  let auth;
   try {
-    app = adminApp();
+    // Import dynamique : une panne de chargement du module devient un message lisible au lieu d'un plantage.
+    const { getAuth } = await import("firebase-admin/auth");
+    auth = getAuth(adminApp());
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 500 });
+    return Response.json({ error: `Serveur : ${(e as Error).message}` }, { status: 500 });
+  }
+  let uid: string;
+  try {
+    ({ uid } = await auth.verifyIdToken(m[1]));
+  } catch (e) {
+    console.error("verifyIdToken", e);
+    return Response.json({ error: "session expirée, reconnecte-toi" }, { status: 401 });
   }
   try {
-    const { uid } = await getAuth(app).verifyIdToken(m[1]);
     const user = await adminDb().doc(`users/${uid}`).get();
     if (user.get("role") !== "gerant") return Response.json({ error: "réservé au gérant" }, { status: 403 });
     return uid;
-  } catch {
-    return Response.json({ error: "session expirée" }, { status: 401 });
+  } catch (e) {
+    return Response.json({ error: `Base de données : ${(e as Error).message}` }, { status: 500 });
   }
 }
 
