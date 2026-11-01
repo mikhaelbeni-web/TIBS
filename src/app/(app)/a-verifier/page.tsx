@@ -42,7 +42,7 @@ function dateTime(ms?: number) {
 async function api(user: { getIdToken: () => Promise<string> }, path: string) {
   const res = await fetch(path, { method: "POST", headers: { authorization: `Bearer ${await user.getIdToken()}` } });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || json.message || `Erreur ${res.status}`);
+  if (!res.ok) throw new Error(json.error || json.message || (res.status >= 500 ? `Erreur serveur ${res.status} : ouvre tibs.vercel.app/api/diagnostic pour voir la cause.` : `Erreur ${res.status}`));
   return json;
 }
 
