@@ -250,3 +250,83 @@ export async function syncAll(budgetMs: number): Promise<Record<RestaurantId, Sy
   }
   return out;
 }
+
+export interface RelireResult {
+  status: "ok" | "non_connecte" | "sans_cle" | "erreur";
+  relus: number;
+  completes: number;
+  restants: number;
+  message?: string;
+}
+
+/**
+ * Relit avec Claude les PDF des éléments « À compléter » déjà dans la liste (par exemple ceux reçus
+ * avant l'ajout de ANTHROPIC_API_KEY). Ne remplit que les champs vides : rien de ce qui est déjà
+ * renseigné n'est écrasé.
+ */
+export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000 }: { budgetMs?: number } = {}): Promise<RelireResult> {
+  const started = Date.now();
+  const out: RelireResult = { status: "ok", relus: 0, completes: 0, restants: 0 };
+  if (!extractionEnabled()) return { ...out, status: "sans_cle", message: "Ajoute ANTHROPIC_API_KEY dans Vercel pour activer la lecture des PDF." };
+  const home = adminDb().doc(`restaurants/${rid}`);
+  const refreshToken = (await home.collection("private").doc("gmail").get()).get("refreshToken") as string | undefined;
+  if (!refreshToken) return { ...out, status: "non_connecte", message: "Boîte Gmail non connectée." };
+
+  const docs = (await home.collection("inbox").where("statut", "==", "a_verifier").get()).docs.filter(
+    (d) => d.get("item.incomplet") === true && d.get("item.source.messageId"),
+  );
+  out.restants = docs.length;
+  if (!docs.length) return out;
+
+  try {
+    const token = await refreshAccessToken(refreshToken);
+    for (const d of docs) {
+      if (Date.now() - started > budgetMs) break;
+      const item = d.get("item") as InboxItem;
+      try {
+        const msg = await getMessage(token, item.source!.messageId);
+        const from = header(msg, "From");
+        const subject = header(msg, "Subject");
+        const pdfs = pdfAttachments(msg).filter((p) => p.size <= MAX_PDF_BYTES);
+        const pdf = pdfs.find((p) => p.filename === item.source?.attachment) ?? pdfs[0];
+        let next: InboxItem | null = null;
+        if (item.kind === "facture") {
+          if (!pdf) continue;
+          const r = await extractFacture(await pdfData(token, msg, pdf), { from, subject, filename: pdf.filename });
+          if (r) {
+            const merged: InboxFacture = { ...r, ...dropEmpty(item), kind: "facture", source: item.source!, fournisseur: item.fournisseur || r.fournisseur || "" };
+            const complete = merged.fournisseur && merged.dateFacture && merged.montantTTC !== undefined;
+            next = { ...merged, incomplet: complete ? undefined : true } as InboxFacture;
+          }
+        } else {
+          const receivedAt = sourceOf(msg).receivedAt ?? "";
+          const r = await extractUber(bodyText(msg), pdf ? await pdfData(token, msg, pdf) : undefined, { from, subject, receivedAt });
+          if (r) {
+            const merged: InboxUber = { ...r, ...dropEmpty(item), kind: "uber", source: item.source! };
+            next = { ...merged, incomplet: merged.date && merged.montant !== undefined ? undefined : true } as InboxUber;
+          }
+        }
+        out.relus++;
+        if (next) {
+          if (!next.incomplet) {
+            delete next.incomplet;
+            out.completes++;
+            out.restants--;
+          }
+          await d.ref.update({ item: JSON.parse(JSON.stringify(next)), relu: Date.now() });
+        }
+      } catch (e) {
+        if (e instanceof GoogleAuthError) throw e;
+        console.error("relire", d.id, e);
+      }
+    }
+  } catch (e) {
+    return { ...out, status: "erreur", message: e instanceof GoogleAuthError ? "Accès Gmail expiré : reconnecte la boîte." : (e as Error).message };
+  }
+  return out;
+}
+
+/** Garde uniquement les champs renseignés (pour ne pas écraser une valeur lue par une valeur vide). */
+function dropEmpty<T extends object>(o: T): Partial<T> {
+  return Object.fromEntries(Object.entries(o).filter(([k, v]) => k !== "incomplet" && v !== undefined && v !== "" && v !== null)) as Partial<T>;
+}
