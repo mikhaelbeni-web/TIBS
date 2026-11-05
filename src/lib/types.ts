@@ -117,7 +117,11 @@ export interface BankTransaction {
   date: string; // AAAA-MM-JJ
   libelle: string;
   montant: number; // centimes, positif = crédit
-  importId: string;
+  importId: string; // "banque" pour le relevé automatique
+  /** "banque" = relevé automatique DSP2 ; absent = import de fichier. */
+  source?: "banque";
+  compte?: string;
+  ref?: string;
   createdAt: number;
 }
 
