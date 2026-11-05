@@ -38,6 +38,33 @@ export interface ConfigUber {
   cookies?: string; // JSON des cookies de la dernière session
   /** Jeton Gmail de la boîte du restaurant, pour lire le code de connexion envoyé par Uber. */
   jetonGmail?: () => Promise<string | null>;
+  /** Demande le code au gérant dans l'app et attend sa saisie (null si rien dans le délai). */
+  attendreCode?: (canal: "sms" | "mail" | "inconnu") => Promise<string | null>;
+}
+
+/** Premier code obtenu : lu dans la boîte Gmail du restaurant, ou tapé par le gérant dans l'app. */
+async function obtenirCode(cfg: ConfigUber, canal: "sms" | "mail" | "inconnu", depuis: number): Promise<string | null> {
+  const sources: Promise<string | null>[] = [];
+  if (cfg.attendreCode) sources.push(cfg.attendreCode(canal));
+  if (canal !== "sms" && cfg.jetonGmail) {
+    sources.push(
+      cfg
+        .jetonGmail()
+        .then((j) => (j ? codeParMail(j, depuis) : null))
+        .catch(() => null),
+    );
+  }
+  if (!sources.length) return null;
+  // Le premier code trouvé gagne ; null seulement si toutes les sources échouent.
+  return new Promise((resolve) => {
+    let restantes = sources.length;
+    for (const p of sources) {
+      p.then((c) => {
+        if (c) resolve(c);
+        else if (--restantes === 0) resolve(null);
+      });
+    }
+  });
 }
 
 export interface SessionUber {
@@ -61,9 +88,10 @@ async function diag(page: Page, etape: string, appels: string[]): Promise<Diagno
 
 const texte = (page: Page) => page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
 
+/** Premier élément visible qui correspond (les étapes cachées d'un formulaire réutilisent souvent les mêmes boutons). */
 async function visible(page: Page, selecteur: string) {
-  const el = await page.$(selecteur);
-  return el && (await el.isVisible().catch(() => false)) ? el : null;
+  for (const el of await page.$$(selecteur)) if (await el.isVisible().catch(() => false)) return el;
+  return null;
 }
 
 const SEL_EMAIL = ["#PHONE_NUMBER_or_EMAIL_ADDRESS", "input[type=email]", "input[name=email]", "input[autocomplete=username]", "input[name*=email i]"].join(", ");
@@ -73,7 +101,7 @@ const SEL_CODE = ["input[autocomplete=one-time-code]", "input[id*=OTP]", "input[
 async function valider(page: Page) {
   const bouton = await visible(page, "#forward-button, button[type=submit]");
   if (bouton) await bouton.click();
-  else await page.keyboard.press("Enter");
+  else if (!(await cliquerTexte(page, "^(continuer|suivant|valider|se connecter|next|continue|submit)$"))) await page.keyboard.press("Enter");
   await Promise.race([page.waitForNavigation({ timeout: 12_000 }).catch(() => {}), pause(4_000)]);
   await calme(page);
 }
@@ -171,19 +199,17 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
             continue;
           }
         }
-        const type = demandeCode(t);
-        const jeton = cfg.jetonGmail ? await cfg.jetonGmail().catch(() => null) : null;
-        if (type === "sms" || !jeton) {
+        const canal = demandeCode(t) ?? "inconnu";
+        const lu = await obtenirCode(cfg, canal, debut);
+        if (!lu) {
           throw new UberError(
-            type === "sms"
-              ? "Uber envoie un code par SMS : le robot ne peut pas le lire. Mets l'adresse mail du restaurant comme moyen de vérification sur le compte Uber, ou désactive la vérification en deux étapes."
-              : "Uber demande un code de vérification et la boîte Gmail du restaurant n'est pas connectée pour le lire.",
+            cfg.attendreCode
+              ? "Uber a demandé un code de vérification et il n'a pas été saisi à temps (2 minutes). Relance et tape le code dès qu'il arrive."
+              : "Uber demande un code de vérification : lance le robot depuis l'app (« Relever maintenant ») pour pouvoir le saisir.",
             await diag(page, "code", appels),
-            type === "sms" ? "code_sms" : "code_mail",
+            canal === "sms" ? "code_sms" : "code_mail",
           );
         }
-        const lu = await codeParMail(jeton, debut);
-        if (!lu) throw new UberError("Code de vérification Uber introuvable dans la boîte mail du restaurant (attendu 1 minute).", await diag(page, "code", appels), "code_mail");
         await taperCode(page, lu);
         await valider(page);
         continue;

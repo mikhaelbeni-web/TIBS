@@ -2,7 +2,7 @@ import { requireGerant, restaurantParam } from "@/lib/server/authz";
 import { UberError } from "@/lib/server/uberEatsBot";
 import { releverUber } from "@/lib/server/uberService";
 
-export const maxDuration = 180;
+export const maxDuration = 300;
 
 /** POST /api/uber-eats/relever?r=19e (gérant) : le robot lit la liste des problèmes et met à jour le suivi. */
 export async function POST(request: Request) {
@@ -11,7 +11,7 @@ export async function POST(request: Request) {
   const rid = restaurantParam(request);
   if (rid instanceof Response) return rid;
   try {
-    const r = await releverUber(rid, { budgetMs: 150_000 });
+    const r = await releverUber(rid, { budgetMs: 270_000, interactif: true });
     return Response.json({ ok: true, ...r });
   } catch (e) {
     const u = e as UberError;
