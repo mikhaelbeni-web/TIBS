@@ -93,23 +93,29 @@ export function lignesDuCompte(compte: string, txs: EbTransaction[]): (LigneBanq
 }
 
 /**
- * Écarte les opérations déjà présentes via un import manuel (fichier du relevé) : même date et même montant.
- * Chaque ligne importée n'éteint qu'une seule opération de l'API.
+ * Écarte les opérations déjà présentes via un import manuel (fichier du relevé) : même montant, date à 3 jours près
+ * (le fichier peut porter la date d'opération, l'API la date comptable). Chaque ligne importée n'éteint qu'une opération.
  */
 export function sansDoublonsImport<T extends { date: string; montant: number }>(
   lignes: T[],
   importees: { date: string; montant: number }[],
+  toleranceJours = 3,
 ): T[] {
-  const stock = new Map<string, number>();
-  for (const i of importees) stock.set(`${i.date}|${i.montant}`, (stock.get(`${i.date}|${i.montant}`) ?? 0) + 1);
+  const jour = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
+  const stock = new Map<number, number[]>();
+  for (const i of importees) stock.set(i.montant, [...(stock.get(i.montant) ?? []), jour(i.date)]);
   return lignes.filter((l) => {
-    const k = `${l.date}|${l.montant}`;
-    const n = stock.get(k) ?? 0;
-    if (n > 0) {
-      stock.set(k, n - 1);
-      return false;
+    const dates = stock.get(l.montant);
+    if (!dates?.length) return true;
+    const d = jour(l.date);
+    let best = -1;
+    for (let k = 0; k < dates.length; k++) {
+      const ecart = Math.abs(dates[k] - d);
+      if (ecart <= toleranceJours && (best < 0 || ecart < Math.abs(dates[best] - d))) best = k;
     }
-    return true;
+    if (best < 0) return true;
+    dates.splice(best, 1);
+    return false;
   });
 }
 

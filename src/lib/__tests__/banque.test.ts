@@ -48,6 +48,11 @@ describe("banque DSP2", () => {
     ]);
   });
 
+  it("tolère un décalage de date entre fichier (date d'opération) et banque (date comptable)", () => {
+    const l = [{ date: "2026-10-31", montant: -52 }, { date: "2026-10-31", montant: -52 }, { date: "2026-10-20", montant: -52 }];
+    expect(sansDoublonsImport(l, [{ date: "2026-10-30", montant: -52 }])).toEqual([{ date: "2026-10-31", montant: -52 }, { date: "2026-10-20", montant: -52 }]);
+  });
+
   it("calcule la date de début et la cadence", () => {
     const now = Date.parse("2026-11-05T12:00:00Z");
     expect(debutReleve(undefined, now)).toBe("2026-08-07");
