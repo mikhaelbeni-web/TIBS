@@ -419,7 +419,13 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000, 
   const docs = (await home.collection("inbox").where("statut", "==", "a_verifier").get()).docs.filter(
     (d) =>
       d.get("item.source.messageId") &&
-      (ids ? ids.includes(d.id) : d.get("item.incomplet") === true && (force || !["pas_facture", "erreur"].includes(d.get("item.lecture")))),
+      (ids
+        ? ids.includes(d.id)
+        : d.get("item.incomplet") === true &&
+          (force ||
+            !["pas_facture", "erreur"].includes(d.get("item.lecture")) ||
+            // PDF refusé par l'API (gratuit) : retenté deux fois par jour, il est réécrit avant d'être renvoyé.
+            (d.get("item.lecture") === "erreur" && /not valid/i.test(String(d.get("item.lectureErreur") ?? "")) && Number(d.get("relu") ?? 0) < Date.now() - 12 * 3_600_000))),
   );
   out.restants = docs.length;
   if (!docs.length) return out;

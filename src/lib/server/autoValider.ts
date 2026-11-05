@@ -10,6 +10,8 @@ import { adminDb } from "@/lib/server/admin";
 export interface AutoResult {
   valides: number;
   enDoute: number;
+  /** Pièces que l'IA a jugées « pas une facture », rangées dans les lignes ignorées. */
+  ignores?: number;
   /** Nombre de factures en attente par raison (une facture peut en avoir plusieurs). */
   raisons?: Partial<Record<Doute, number>>;
 }
@@ -79,6 +81,12 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
 
   for (const d of factures) {
     const item = d.get("item") as InboxFacture;
+    // L'IA a lu le PDF et n'y a vu ni facture ni avoir (confirmation de commande, CGV…) : rangé dans les lignes ignorées.
+    if (item.lecture === "pas_facture" && d.get("remiseAVerifier") !== true) {
+      await d.ref.update({ statut: "rejete", traiteLe: Date.now(), auto: true, doutes: FieldValue.delete() });
+      out.ignores = (out.ignores ?? 0) + 1;
+      continue;
+    }
     const nom = low(item.fournisseur);
     const email = emailOf(item.source?.from ?? "");
     const reconnu = fournisseurDeLExpediteur(email, rulesDe.get(item.source?.boite ?? rid)!, suppliers, boites);

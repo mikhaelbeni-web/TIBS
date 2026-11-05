@@ -174,6 +174,17 @@ async function ask<S extends z.ZodType>(lecteur: Lecteur, schema: S, content: An
 const contextLine = (c: { from: string; subject: string; filename?: string }) =>
   `Mail de : ${c.from}\nObjet : ${c.subject}${c.filename ? `\nPièce jointe : ${c.filename}` : ""}`;
 
+/** Réécrit un PDF mal formé ou chiffré sans mot de passe d'ouverture (pdf-lib), en base64 ; null si impossible. */
+async function reecrirePdf(pdfBase64: string): Promise<string | null> {
+  try {
+    const { PDFDocument } = await import("pdf-lib");
+    const doc = await PDFDocument.load(Buffer.from(pdfBase64, "base64"), { ignoreEncryption: true, updateMetadata: false });
+    return Buffer.from(await doc.save({ useObjectStreams: false })).toString("base64");
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Facture ou avoir (montants d'un avoir rendus négatifs), relevé de factures (kind « releve »),
  * ou null si le PDF n'est ni l'un ni l'autre (bon de livraison, CGV…).
@@ -183,10 +194,20 @@ export async function extractFacture(
   ctx: { from: string; subject: string; filename: string },
   lecteur: Lecteur,
 ): Promise<ExtractedFacture | ExtractedReleve | null> {
-  const r = await ask(lecteur, FactureSchema, [
-    { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } },
-    { type: "text", text: `${contextLine(ctx)}\n\nDe quel document s'agit-il ? Relève ses informations.` },
-  ]);
+  const demande = (data: string) =>
+    ask(lecteur, FactureSchema, [
+      { type: "document", source: { type: "base64", media_type: "application/pdf", data } },
+      { type: "text", text: `${contextLine(ctx)}\n\nDe quel document s'agit-il ? Relève ses informations.` },
+    ]);
+  let r: z.infer<typeof FactureSchema> | null;
+  try {
+    r = await demande(pdfBase64);
+  } catch (e) {
+    // PDF refusé par l'API (« The PDF specified was not valid », ex. Enedis) : on le réécrit proprement et on réessaie une fois.
+    const propre = /pdf/i.test((e as Error).message) ? await reecrirePdf(pdfBase64) : null;
+    if (!propre) throw e;
+    r = await demande(propre);
+  }
   if (!r || r.type_document === "autre") return null;
   if (r.type_document === "releve") {
     const lignes = r.lignes
