@@ -8,11 +8,14 @@ import { Badge, Button, Card, Empty, ErrorBox, Field, Input } from "@/components
 import { isCashDeposit, isUber } from "@/lib/cashImport";
 import { db } from "@/lib/firebase";
 import { formatEuros } from "@/lib/money";
+import { moisCle } from "@/lib/reglages";
 import type { BankLine, CashLine } from "@/lib/reconcile";
 import { comparerCB, comparerUber, comparerUberBanque, comparerUberJour, pire, controleTotal, type Statut, type TicketZ } from "@/lib/ticketZ";
 import type { BankTransaction, CashEntry, UberJourDoc, UberPayout, WithId } from "@/lib/types";
 
 const fr = (iso: string) => iso.split("-").reverse().join("/");
+/** « octobre 2026 ». */
+const nomMois = (ym: string) => new Date(`${ym}-15T12:00:00`).toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
 const hier = () => new Date(Date.now() - 86400000).toLocaleDateString("sv-SE", { timeZone: "Europe/Paris" });
 const lendemain = (iso: string) => new Date(Date.parse(`${iso}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
 
@@ -78,7 +81,16 @@ export function JourAJour({
   const { user } = useAuth();
   const { rid } = useRestaurant();
   // Dernier passage du robot L'Addition (automatique chaque matin, ou bouton).
-  const [auto, setAuto] = useState<{ le: number; jours: number; zLus: number; echecs: string[]; erreur?: string; diagnostic?: unknown } | null>(null);
+  const [auto, setAuto] = useState<{
+    le: number;
+    mois?: string[];
+    jours: number;
+    zLus: number;
+    zRestants?: number;
+    echecs: string[];
+    erreur?: string;
+    diagnostic?: unknown;
+  } | null>(null);
   const [recup, setRecup] = useState(false);
   const [copie, setCopie] = useState(false);
   useEffect(
@@ -139,16 +151,26 @@ export function JourAJour({
     setInfo(null);
     setRecup(true);
     try {
-      const res = await fetch(`/api/laddition/services?r=${rid}`, { method: "POST", headers: { authorization: `Bearer ${await user.getIdToken()}` } });
-      const b = (await res.json().catch(() => ({}))) as { error?: string; erreur?: string; jours?: number; zLus?: number };
+      const res = await fetch(`/api/laddition/services?r=${rid}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${await user.getIdToken()}`, "content-type": "application/json" },
+        body: JSON.stringify({ mois: moisChoisi }),
+      });
+      const b = (await res.json().catch(() => ({}))) as { error?: string; erreur?: string; jours?: number; zLus?: number; zRestants?: number };
       if (!res.ok) throw new Error(b.erreur ?? b.error ?? `Erreur ${res.status}`);
-      setInfo(`L'Addition : ${b.jours ?? 0} journée(s) à jour, ${b.zLus ?? 0} ticket(s) Z lu(s).`);
+      setInfo(
+        `L'Addition, ${nomMois(moisChoisi)} : ${b.jours ?? 0} journée(s) à jour, ${b.zLus ?? 0} ticket(s) Z lu(s).` +
+          (b.zRestants ? ` ${b.zRestants} journée(s) encore à lire : appuie à nouveau sur le bouton.` : ""),
+      );
     } catch (e) {
       setErreur((e as Error).message);
     } finally {
       setRecup(false);
     }
   }
+
+  // Mois de la journée choisie (jamais un mois futur) : c'est celui que le bouton relève.
+  const moisChoisi = jour.slice(0, 7) > moisCle(new Date()) ? moisCle(new Date()) : jour.slice(0, 7);
 
   async function copierJournal() {
     await navigator.clipboard.writeText(JSON.stringify(auto?.diagnostic, null, 2)).catch(() => {});
@@ -182,16 +204,22 @@ export function JourAJour({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 items-end gap-2 sm:max-w-xl sm:grid-cols-2">
-        <Field label="Journée de service" hint={`Ticket Z daté du ${fr(lendemain(jour))} si la caisse ferme après minuit`}>
-          <Input type="date" value={jour} onChange={(e) => e.target.value && setJour(e.target.value)} />
-        </Field>
-        <Button onClick={() => fichier.current?.click()} disabled={lecture}>
-          {lecture ? "Lecture du ticket…" : entry?.source === "ticketZ" ? "Redéposer le ticket Z" : "Déposer le ticket Z"}
-        </Button>
+      <div className="space-y-1">
+        <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[minmax(0,14rem)_auto_auto] sm:justify-start">
+          <Field label="Journée de service">
+            <Input type="date" value={jour} onChange={(e) => e.target.value && setJour(e.target.value)} />
+          </Field>
+          <Button onClick={recuperer} disabled={recup}>
+            {recup ? "L'Addition en cours (1 à 4 min)…" : `Récupérer ${nomMois(moisChoisi).split(" ")[0]}`}
+          </Button>
+          <Button variant="secondary" onClick={() => fichier.current?.click()} disabled={lecture}>
+            {lecture ? "Lecture du ticket…" : entry?.source === "ticketZ" ? "Redéposer le ticket Z" : "Déposer le ticket Z"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted">Ticket Z daté du {fr(lendemain(jour))} si la caisse ferme après minuit.</p>
       </div>
       <input ref={fichier} type="file" accept="application/pdf,image/*" className="hidden" onChange={(e) => deposer(e.target.files?.[0])} />
-      <Card className="flex flex-wrap items-center justify-between gap-3">
+      <Card className="space-y-2">
         <div className="min-w-0 text-sm">
           <div className="font-medium">Tickets Z récupérés automatiquement chaque matin</div>
           <div className={`text-xs ${auto?.erreur ? "text-danger" : "text-muted"}`}>
@@ -199,12 +227,19 @@ export function JourAJour({
               ? "Pas encore de passage du robot L'Addition."
               : auto.erreur
                 ? `Dernier essai le ${new Date(auto.le).toLocaleString("fr-FR")} : ${auto.erreur}`
-                : `Dernier passage le ${new Date(auto.le).toLocaleString("fr-FR")} : ${auto.jours} journée(s), ${auto.zLus} ticket(s) Z lu(s)${auto.echecs.length ? `, ${auto.echecs.length} non lu(s)` : ""}.`}
+                : `Dernier passage le ${new Date(auto.le).toLocaleString("fr-FR")}${auto.mois?.length ? ` (${auto.mois.map(nomMois).join(", ")})` : ""} : ${auto.jours} journée(s), ${auto.zLus} ticket(s) Z lu(s)${auto.echecs.length ? `, ${auto.echecs.length} non lu(s)` : ""}${auto.zRestants ? `, ${auto.zRestants} encore à lire` : ""}.`}
           </div>
         </div>
-        <Button variant="secondary" onClick={recuperer} disabled={recup}>
-          {recup ? "L'Addition en cours (1 à 4 min)…" : "Récupérer maintenant"}
-        </Button>
+        {!auto?.erreur && Boolean(auto?.echecs.length) && (
+          <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted">
+            {auto?.echecs.slice(0, 4).map((e, i) => (
+              <li key={i} className="break-words">
+                {e}
+              </li>
+            ))}
+            {(auto?.echecs.length ?? 0) > 4 && <li>… et {(auto?.echecs.length ?? 0) - 4} autre(s)</li>}
+          </ul>
+        )}
         {Boolean(auto?.diagnostic) && (
           <details className="w-full text-xs">
             <summary className="cursor-pointer text-muted">Ce que le robot a vu (à transmettre pour corriger)</summary>

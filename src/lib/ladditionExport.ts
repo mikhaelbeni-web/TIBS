@@ -50,7 +50,7 @@ const COLONNES = {
   cash: ["cash", "especes"],
   cb: ["cb"],
   uber: ["uber", "ubereats"],
-  url: ["url", "lien"],
+  url: ["url", "lien", "ticketz", "lienticketz", "urlticketz"],
 } as const;
 
 /** Lit les lignes brutes de la feuille (tableaux de cellules, en-têtes compris). */
@@ -77,14 +77,16 @@ export function lireExportServices(rows: unknown[][]): ExportServices {
     }
     const m = premiere.match(/^Du\s+(\d{2})\/(\d{2})\/(\d{4})/i);
     if (!m) continue;
-    const url = col.url >= 0 ? String(r[col.url] ?? "").trim() : "";
+    // Lien signé du Z : sa colonne, sinon n'importe quelle cellule qui pointe vers L'Addition (http ou https).
+    const lien = (c: unknown) => (/^https?:\/\/\S+$/i.test(String(c ?? "").trim()) ? String(c).trim() : "");
+    const url = (col.url >= 0 ? lien(r[col.url]) : "") || r.map(lien).find((u) => /laddition\.com/i.test(u)) || "";
     services.push({
       jour: `${m[3]}-${m[2]}-${m[1]}`,
       ...chiffres(r),
       cash: val(r, "cash"),
       cb: val(r, "cb"),
       uber: val(r, "uber"),
-      ...(/^https:\/\//.test(url) ? { zUrl: url } : {}),
+      ...(url ? { zUrl: url } : {}),
     });
   }
   const etablissement = String(rows[h][0] ?? "").match(/\(([^)]+)\)/)?.[1] ?? "";

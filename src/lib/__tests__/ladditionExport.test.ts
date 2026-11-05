@@ -41,3 +41,17 @@ describe("export « Détails par service »", () => {
     expect(() => lireExportServices([["Date", "Libellé", "Montant"]])).toThrow(/Détails par service/);
   });
 });
+
+describe("lien du ticket Z dans l'export", () => {
+  const entete = ["Services (Tib’s 19)", "Ticket Z", "Jour", "CA TTC Net", "TTC 10.00%", "TTC 20.00%", "TTC 5.50%", "Cash", "CB", "UBER"];
+  const ligne = (z: string) => ["Du 01/10/2026 (11:13) au 02/10/2026 (00:42)", z, "jeu 1 oct", 100, 100, 0, 0, 0, 100, 0];
+  it("colonne « Ticket Z », lien en http accepté", () => {
+    const exp = lireExportServices([entete, ligne("http://data.laddition.com/z/1.pdf")]);
+    expect(exp.services[0].zUrl).toBe("http://data.laddition.com/z/1.pdf");
+  });
+  it("sans colonne reconnue : lien L'Addition trouvé dans la ligne ; texte ignoré", () => {
+    const sans = entete.map((h) => (h === "Ticket Z" ? "Document" : h));
+    expect(lireExportServices([sans, ligne("https://data.laddition.com/z/2.pdf")]).services[0].zUrl).toBe("https://data.laddition.com/z/2.pdf");
+    expect(lireExportServices([entete, ligne("Télécharger")]).services[0].zUrl).toBeUndefined();
+  });
+});
