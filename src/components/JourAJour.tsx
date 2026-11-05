@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { doc, onSnapshot } from "firebase/firestore";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { useRestaurant } from "@/components/RestaurantProvider";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input } from "@/components/ui";
 import { isCashDeposit, isUber } from "@/lib/cashImport";
+import { db } from "@/lib/firebase";
 import { formatEuros } from "@/lib/money";
 import type { BankLine, CashLine } from "@/lib/reconcile";
 import { comparerCB, comparerUber, comparerUberBanque, comparerUberJour, pire, controleTotal, type Statut, type TicketZ } from "@/lib/ticketZ";
@@ -75,6 +77,18 @@ export function JourAJour({
 }) {
   const { user } = useAuth();
   const { rid } = useRestaurant();
+  // Dernier passage du robot L'Addition (automatique chaque matin, ou bouton).
+  const [auto, setAuto] = useState<{ le: number; jours: number; zLus: number; echecs: string[]; erreur?: string } | null>(null);
+  const [recup, setRecup] = useState(false);
+  useEffect(
+    () =>
+      onSnapshot(
+        doc(db(), "restaurants", rid, "settings", "ticketsZ"),
+        (d) => setAuto(d.exists() ? (d.data() as typeof auto) : null),
+        () => setAuto(null),
+      ),
+    [rid],
+  );
   const [jour, setJour] = useState(hier());
   const [lecture, setLecture] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
@@ -118,6 +132,23 @@ export function JourAJour({
   );
   const total = ticket ? controleTotal(ticket) : null;
 
+  async function recuperer() {
+    if (!user) return;
+    setErreur(null);
+    setInfo(null);
+    setRecup(true);
+    try {
+      const res = await fetch(`/api/laddition/services?r=${rid}`, { method: "POST", headers: { authorization: `Bearer ${await user.getIdToken()}` } });
+      const b = (await res.json().catch(() => ({}))) as { error?: string; erreur?: string; jours?: number; zLus?: number };
+      if (!res.ok) throw new Error(b.erreur ?? b.error ?? `Erreur ${res.status}`);
+      setInfo(`L'Addition : ${b.jours ?? 0} journée(s) à jour, ${b.zLus ?? 0} ticket(s) Z lu(s).`);
+    } catch (e) {
+      setErreur((e as Error).message);
+    } finally {
+      setRecup(false);
+    }
+  }
+
   async function deposer(f?: File) {
     if (!f || !user) return;
     setErreur(null);
@@ -153,6 +184,21 @@ export function JourAJour({
         </Button>
       </div>
       <input ref={fichier} type="file" accept="application/pdf,image/*" className="hidden" onChange={(e) => deposer(e.target.files?.[0])} />
+      <Card className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 text-sm">
+          <div className="font-medium">Tickets Z récupérés automatiquement chaque matin</div>
+          <div className={`text-xs ${auto?.erreur ? "text-danger" : "text-muted"}`}>
+            {!auto
+              ? "Pas encore de passage du robot L'Addition."
+              : auto.erreur
+                ? `Dernier essai le ${new Date(auto.le).toLocaleString("fr-FR")} : ${auto.erreur}`
+                : `Dernier passage le ${new Date(auto.le).toLocaleString("fr-FR")} : ${auto.jours} journée(s), ${auto.zLus} ticket(s) Z lu(s)${auto.echecs.length ? `, ${auto.echecs.length} non lu(s)` : ""}.`}
+          </div>
+        </div>
+        <Button variant="secondary" onClick={recuperer} disabled={recup}>
+          {recup ? "L'Addition en cours (1 à 4 min)…" : "Récupérer maintenant"}
+        </Button>
+      </Card>
       <ErrorBox message={erreur} />
       {info && <p className="rounded-control bg-success-soft p-3 text-sm text-success">{info}</p>}
 
