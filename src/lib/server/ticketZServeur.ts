@@ -61,8 +61,8 @@ export function entreeDepuisZ(z: ExtractedTicketZ & { dateTicket: string }) {
   return { jour, entry };
 }
 
-/** Lit un Z (PDF ou photo) avec l'IA et l'enregistre, en fusion, sur sa journée de service. */
-export async function lireEtEnregistrerZ(rid: RestaurantId, fichier: { base64: string; mediaType: string }, lecteur: Lecteur) {
+/** Lit un Z (PDF ou photo) avec l'IA. */
+export async function lireZ(fichier: { base64: string; mediaType: string }, lecteur: Lecteur): Promise<ExtractedTicketZ & { dateTicket: string }> {
   if (!lecteur.peutLire()) {
     const raison = lecteur.raison === "budget" ? "budget IA du mois atteint (Réglages)" : lecteur.raison === "limite" ? "nombre max de lectures atteint" : "lecture IA désactivée dans les Réglages";
     throw new ZErreur(`Lecture impossible : ${raison}.`, 429);
@@ -76,7 +76,36 @@ export async function lireEtEnregistrerZ(rid: RestaurantId, fichier: { base64: s
   }
   if (!z) throw new ZErreur("Ce document ne ressemble pas à un ticket Z.", 422);
   if (!z.dateTicket) throw new ZErreur("Date du ticket illisible.", 422);
-  const { jour, entry } = entreeDepuisZ({ ...z, dateTicket: z.dateTicket });
+  return { ...z, dateTicket: z.dateTicket };
+}
+
+/**
+ * Plusieurs Z pour une même journée (service du midi et du soir clôturés séparément) :
+ * paiements additionnés par moyen de paiement, totaux additionnés, date du dernier Z.
+ */
+export function fusionnerZ(zs: (ExtractedTicketZ & { dateTicket: string })[]): ExtractedTicketZ & { dateTicket: string } {
+  if (zs.length === 1) return zs[0];
+  const ordre = [...zs].sort((a, b) => `${a.dateTicket} ${a.heureCloture ?? ""}`.localeCompare(`${b.dateTicket} ${b.heureCloture ?? ""}`));
+  const paiements = new Map<string, { libelle: string; montant: number; nombre?: number }>();
+  for (const z of ordre) {
+    for (const pa of z.paiements) {
+      const cle = pa.libelle.trim().toLowerCase();
+      const deja = paiements.get(cle);
+      if (!deja) paiements.set(cle, { ...pa });
+      else {
+        deja.montant += pa.montant;
+        if (pa.nombre !== undefined) deja.nombre = (deja.nombre ?? 0) + pa.nombre;
+      }
+    }
+  }
+  const somme = (k: "total" | "ttc55" | "ttc10" | "ttc20") => (zs.some((z) => z[k] !== undefined) ? zs.reduce((t, z) => t + (z[k] ?? 0), 0) : undefined);
+  const dernier = ordre[ordre.length - 1];
+  return { ...dernier, paiements: [...paiements.values()], total: somme("total"), ttc55: somme("ttc55"), ttc10: somme("ttc10"), ttc20: somme("ttc20") };
+}
+
+/** Lit un Z (PDF ou photo) avec l'IA et l'enregistre, en fusion, sur sa journée de service. */
+export async function lireEtEnregistrerZ(rid: RestaurantId, fichier: { base64: string; mediaType: string }, lecteur: Lecteur) {
+  const { jour, entry } = entreeDepuisZ(await lireZ(fichier, lecteur));
   // Fusion : garde les chiffres de l'export « Détails par service » (CA TTC net…) s'ils existent.
   await adminDb().doc(`restaurants/${rid}/cashEntries/${jour}`).set(entry, { merge: true });
   return { jour, entry };
@@ -107,6 +136,8 @@ export interface BilanServices {
   zLus: number;
   /** Jours dont le Z n'a pas pu être lu (raison courte). */
   echecs: string[];
+  /** Journées dont le Z reste à lire (temps ou nombre de lectures du passage épuisé) : un nouveau passage les reprend. */
+  zRestants?: number;
   erreur?: string;
   /** Journal du robot (pages, cadres, appels sans secrets) quand il n'a rien trouvé ou a échoué. */
   diagnostic?: Diagnostic;
@@ -159,7 +190,8 @@ export async function synchroniserLAddition(rid: RestaurantId, opts: { mois?: st
   try {
     for (const mois of bilan.mois) {
       const r = await extraireMois({ identifiant: priv.identifiant, motDePasse, etablissement: priv.etablissement || undefined, mois, servicesSeulement: true });
-      const jours = journeesDesServices(r.services ?? []);
+      // Seulement les journées du mois relevé (le fichier peut déborder si la période n'a pas pu être imposée).
+      const jours = new Map([...journeesDesServices(r.services ?? [])].filter(([j]) => j.startsWith(`${mois}-`)));
       if (!jours.size) bilan.diagnostic = propre(r.diagnostic);
       const existants = new Map(
         (await db.collection(`restaurants/${rid}/cashEntries`).where("date", ">=", `${mois}-01`).where("date", "<=", `${mois}-31`).get()).docs.map((d) => [d.id, d.data()]),
@@ -177,20 +209,34 @@ export async function synchroniserLAddition(rid: RestaurantId, opts: { mois?: st
       await batch.commit();
       bilan.jours += jours.size;
 
-      // Tickets Z pas encore lus (le lien expire : on télécharge et lit tout de suite, sans le garder).
+      // Tickets Z pas encore lus (le lien expire : on télécharge et lit tout de suite, sans le garder),
+      // les plus récents d'abord, 3 journées à la fois.
       if (!extractionEnabled()) continue;
-      for (const [jour, d] of [...jours].sort(([a], [b]) => b.localeCompare(a))) {
-        if (existants.get(jour)?.ticketZ || !d.liens.length) continue;
-        if ((opts.maxZ ?? 40) <= bilan.zLus || Date.now() - debut > budget) break;
-        try {
-          for (const lien of d.liens) {
-            await lireEtEnregistrerZ(rid, { base64: await telechargerZ(lien), mediaType: "application/pdf" }, lecteur);
-            bilan.zLus++;
-          }
-        } catch (e) {
-          bilan.echecs.push(`${jour} : ${(e as Error).message}`);
-          if (e instanceof ZErreur && e.status === 429) break;
+      const aLire = [...jours].sort(([a], [b]) => b.localeCompare(a)).filter(([jour, d]) => !existants.get(jour)?.ticketZ && d.liens.length);
+      let arret = false;
+      for (let i = 0; i < aLire.length; i += 3) {
+        if (arret || (opts.maxZ ?? 40) <= bilan.zLus || Date.now() - debut > budget) {
+          bilan.zRestants = (bilan.zRestants ?? 0) + aLire.length - i;
+          break;
         }
+        const lot = aLire.slice(i, i + 3);
+        const res = await Promise.allSettled(
+          lot.map(async ([jour, d]) => {
+            const zs = [];
+            for (const lien of d.liens) zs.push(await lireZ({ base64: await telechargerZ(lien), mediaType: "application/pdf" }, lecteur));
+            // La journée vient de l'export (fait foi), pas de la date imprimée sur le Z.
+            const { entry } = entreeDepuisZ(fusionnerZ(zs));
+            await db.doc(`restaurants/${rid}/cashEntries/${jour}`).set({ ...entry, date: jour }, { merge: true });
+            return zs.length;
+          }),
+        );
+        res.forEach((x, k) => {
+          if (x.status === "fulfilled") bilan.zLus += x.value;
+          else {
+            bilan.echecs.push(`${lot[k][0]} : ${(x.reason as Error).message}`);
+            if (x.reason instanceof ZErreur && x.reason.status === 429) arret = true;
+          }
+        });
       }
     }
   } catch (e) {
