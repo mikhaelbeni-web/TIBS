@@ -78,8 +78,9 @@ export function JourAJour({
   const { user } = useAuth();
   const { rid } = useRestaurant();
   // Dernier passage du robot L'Addition (automatique chaque matin, ou bouton).
-  const [auto, setAuto] = useState<{ le: number; jours: number; zLus: number; echecs: string[]; erreur?: string } | null>(null);
+  const [auto, setAuto] = useState<{ le: number; jours: number; zLus: number; echecs: string[]; erreur?: string; diagnostic?: unknown } | null>(null);
   const [recup, setRecup] = useState(false);
+  const [copie, setCopie] = useState(false);
   useEffect(
     () =>
       onSnapshot(
@@ -149,6 +150,12 @@ export function JourAJour({
     }
   }
 
+  async function copierJournal() {
+    await navigator.clipboard.writeText(JSON.stringify(auto?.diagnostic, null, 2)).catch(() => {});
+    setCopie(true);
+    setTimeout(() => setCopie(false), 2000);
+  }
+
   async function deposer(f?: File) {
     if (!f || !user) return;
     setErreur(null);
@@ -198,6 +205,15 @@ export function JourAJour({
         <Button variant="secondary" onClick={recuperer} disabled={recup}>
           {recup ? "L'Addition en cours (1 à 4 min)…" : "Récupérer maintenant"}
         </Button>
+        {Boolean(auto?.diagnostic) && (
+          <details className="w-full text-xs">
+            <summary className="cursor-pointer text-muted">Ce que le robot a vu (à transmettre pour corriger)</summary>
+            <Button variant="secondary" className="mt-2" onClick={copierJournal}>
+              {copie ? "Copié" : "Copier le journal"}
+            </Button>
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-control bg-bg p-2">{JSON.stringify(auto?.diagnostic, null, 2)}</pre>
+          </details>
+        )}
       </Card>
       <ErrorBox message={erreur} />
       {info && <p className="rounded-control bg-success-soft p-3 text-sm text-success">{info}</p>}

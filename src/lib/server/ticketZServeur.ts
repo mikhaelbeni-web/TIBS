@@ -5,7 +5,7 @@ import type { RestaurantId } from "@/lib/restaurants";
 import { categorie, jourDuTicket, totaux, urlZAutorisee } from "@/lib/ticketZ";
 import { adminDb } from "@/lib/server/admin";
 import { extractionEnabled, extractTicketZ, type ExtractedTicketZ, type Lecteur } from "@/lib/server/extract";
-import { extraireMois } from "@/lib/server/ladditionBot";
+import { extraireMois, LadditionError, type Diagnostic } from "@/lib/server/ladditionBot";
 import { enregistrerConsommation, lecteurPour } from "@/lib/server/mailSync";
 import { dechiffrer, type Chiffre } from "@/lib/server/secretBox";
 
@@ -108,7 +108,12 @@ export interface BilanServices {
   /** Jours dont le Z n'a pas pu être lu (raison courte). */
   echecs: string[];
   erreur?: string;
+  /** Journal du robot (pages, cadres, appels sans secrets) quand il n'a rien trouvé ou a échoué. */
+  diagnostic?: Diagnostic;
 }
+
+/** Sans valeurs undefined (refusées par Firestore). */
+const propre = (d: Diagnostic): Diagnostic => JSON.parse(JSON.stringify(d)) as Diagnostic;
 
 /** Mois à relever : le mois en cours, et le précédent les 3 premiers jours (pour ses derniers services). */
 export function moisARelever(now = new Date()): string[] {
@@ -155,6 +160,7 @@ export async function synchroniserLAddition(rid: RestaurantId, opts: { mois?: st
     for (const mois of bilan.mois) {
       const r = await extraireMois({ identifiant: priv.identifiant, motDePasse, etablissement: priv.etablissement || undefined, mois, servicesSeulement: true });
       const jours = journeesDesServices(r.services ?? []);
+      if (!jours.size) bilan.diagnostic = propre(r.diagnostic);
       const existants = new Map(
         (await db.collection(`restaurants/${rid}/cashEntries`).where("date", ">=", `${mois}-01`).where("date", "<=", `${mois}-31`).get()).docs.map((d) => [d.id, d.data()]),
       );
@@ -190,6 +196,7 @@ export async function synchroniserLAddition(rid: RestaurantId, opts: { mois?: st
   } catch (e) {
     console.error("laddition services", (e as Error).message);
     bilan.erreur = (e as Error).message;
+    if (e instanceof LadditionError && e.diagnostic) bilan.diagnostic = propre(e.diagnostic);
   } finally {
     await enregistrerConsommation(statusRef, lecteur).catch(() => {});
   }
