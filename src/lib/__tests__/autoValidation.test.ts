@@ -44,7 +44,6 @@ describe("doutesFacture", () => {
     expect(doutesFacture(facture(), ctx({ fournisseurConnu: false }))).toEqual(["fournisseur_inconnu"]);
     expect(doutesFacture(facture(), ctx({ doublon: true }))).toEqual(["doublon"]);
     expect(doutesFacture(facture(), ctx({ remiseAVerifier: true }))).toEqual(["remise_a_verifier"]);
-    expect(doutesFacture(facture(), ctx({ plusieursFactures: true }))).toEqual(["plusieurs_factures"]);
     expect(doutesFacture(facture(), ctx({ historiqueTTC: [2_000, 3_000, 3_400] }))).toEqual(["montant_inhabituel"]);
     expect(doutesFacture(facture(), ctx({ historiqueTTC: [2_000, 3_000] }))).toEqual([]);
   });

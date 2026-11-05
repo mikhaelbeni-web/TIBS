@@ -24,7 +24,6 @@ export type Doute =
   | "montant_eleve"
   | "type_document"
   | "autre_restaurant"
-  | "plusieurs_factures"
   | "mois_ancien"
   | "remise_a_verifier";
 
@@ -46,7 +45,6 @@ export const DOUTE_TEXTE: Record<Doute, string> = {
   montant_eleve: "Montant élevé pour un fournisseur encore peu connu (moins de 3 factures).",
   type_document: "Le mail ou le PDF parle d'avoir, relevé, bon de livraison, devis, duplicata ou relance.",
   autre_restaurant: "Le PDF semble adressé à l'autre restaurant.",
-  plusieurs_factures: "Le mail contient plusieurs factures : à contrôler une par une.",
   mois_ancien: "Facture d'un mois déjà clôturé (avant le mois dernier).",
   remise_a_verifier: "Remise à vérifier à la main après une validation automatique.",
 };
@@ -58,8 +56,6 @@ export interface ContexteValidation {
   restaurant: "19e" | "17e";
   /** Jour de réception du mail (AAAA-MM-JJ), sinon aujourd'hui. */
   recuLe?: string;
-  /** Le même mail a donné plusieurs factures. */
-  plusieursFactures?: boolean;
   /** L'expéditeur est un fournisseur connu (règles de tri ou e-mail de la fiche fournisseur). */
   fournisseurConnu: boolean;
   /** Même fournisseur et même numéro (ou même TTC à ±3 jours) déjà enregistré ou reçu. */
@@ -108,7 +104,6 @@ export function doutesFacture(item: InboxFacture, ctx: ContexteValidation): Dout
   const textes = [item.source.subject, item.source.attachment, item.numero].filter(Boolean).join(" ");
   if (MOTS_DOUTEUX.test(textes)) d.push("type_document");
   if (item.etablissementPdf && item.etablissementPdf !== ctx.restaurant) d.push("autre_restaurant");
-  if (ctx.plusieursFactures) d.push("plusieurs_factures");
 
   const { montantHT: ht, montantTVA: tva, montantTTC: ttc } = item;
   if (ht === undefined || tva === undefined || ttc === undefined) d.push("montants_absents");

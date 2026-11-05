@@ -10,6 +10,8 @@ import { adminDb } from "@/lib/server/admin";
 export interface AutoResult {
   valides: number;
   enDoute: number;
+  /** Nombre de factures en attente par raison (une facture peut en avoir plusieurs). */
+  raisons?: Partial<Record<Doute, number>>;
 }
 
 const parisJour = (t = Date.now()) => new Date(t).toLocaleDateString("en-CA", { timeZone: "Europe/Paris" });
@@ -73,11 +75,6 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
     ttc: Number(d.get("montantTTC")),
   }));
   const factureDocs = [...pending.docs, ...traites.docs].filter((d) => d.get("item.kind") === "facture");
-  const parMail = new Map<string, number>();
-  for (const d of factureDocs) {
-    const m = String(d.get("item.source.messageId") ?? "");
-    if (m && d.get("statut") !== "releve") parMail.set(m, (parMail.get(m) ?? 0) + 1);
-  }
   const aujourdhui = parisJour();
 
   for (const d of factures) {
@@ -104,7 +101,6 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
       aujourdhui,
       restaurant: rid,
       ...(Number.isFinite(recu) ? { recuLe: parisJour(recu) } : {}),
-      plusieursFactures: (parMail.get(item.source?.messageId ?? "") ?? 0) > 1,
       fournisseurConnu: connu,
       doublon,
       historiqueTTC: deCeFournisseur.map((i) => i.ttc).filter((n) => Number.isFinite(n) && n > 0),
@@ -113,6 +109,8 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
 
     if (doutes.length) {
       out.enDoute++;
+      out.raisons ??= {};
+      for (const x of doutes) out.raisons[x] = (out.raisons[x] ?? 0) + 1;
       const avant = (d.get("doutes") as Doute[] | undefined) ?? [];
       if (avant.join() !== doutes.join()) await d.ref.update({ doutes });
       continue;
