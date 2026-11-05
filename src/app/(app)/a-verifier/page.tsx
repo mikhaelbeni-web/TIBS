@@ -184,7 +184,7 @@ function MailCard({ du, au }: { du: string; au: string }) {
       if (kind === "sync") {
         setInfo(
           r.status === "ok"
-            ? `${filtre ? `Du ${fr(du)} au ${fr(au)} : ` : ""}${r.messagesVus} mail(s) lu(s), ${r.nouveaux} élément(s) ajouté(s)${r.releves ? `, ${r.releves} relevé(s) fournisseur rangé(s) dans Factures` : ""}.${r.incomplet ? " Il en reste : relance pour continuer." : ""}`
+            ? `${filtre ? `Du ${fr(du)} au ${fr(au)} : ` : ""}${r.messagesVus} mail(s) lu(s), ${r.nouveaux} élément(s) ajouté(s)${r.releves ? `, ${r.releves} relevé(s) fournisseur rangé(s) dans Factures` : ""}${r.uberAuto ? `, ${r.uberAuto} récap(s) Uber enregistré(s) directement dans Caisse > Uber` : ""}.${r.incomplet ? " Il en reste : relance pour continuer." : ""}`
             : r.message,
         );
         if (r.relu?.status === "ok" && r.relu.relus) setInfo((i) => `${i ?? ""} ${texteRelu(r.relu)}`.trim());
@@ -324,12 +324,17 @@ function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mai
         });
       } else {
         const frais = f.frais ? toCents(f.frais) : null;
-        batch.set(doc(db(), "restaurants", rid, "uberPayouts", `${f.date}_${ttc}_0`), {
+        const u = d.item;
+        // Même clé que l'enregistrement automatique du récap : une semaine = un versement.
+        batch.set(doc(db(), "restaurants", rid, "uberPayouts", u.debut ? `mail-${u.debut}` : `${f.date}_${ttc}_0`), {
           date: f.date,
           montant: ttc,
-          ...(d.item.brut !== undefined ? { brut: d.item.brut } : {}),
+          ...(u.brut !== undefined ? { brut: u.brut } : {}),
           ...(frais !== null ? { frais: Math.abs(frais) } : {}),
+          ...(u.titres !== undefined ? { titres: u.titres } : {}),
+          ...(u.debut && u.fin ? { debut: u.debut, fin: u.fin } : {}),
           ...(f.reference.trim() ? { reference: f.reference.trim() } : {}),
+          source: "manuel",
           createdAt: now,
         });
       }

@@ -73,7 +73,7 @@ run("syncMail (émulateur)", () => {
     const { syncMail } = await import("../mailSync");
     const db = adminDb();
     for (const rid of ["19e", "17e"]) {
-      for (const c of ["inbox", "mailLog"]) for (const d of (await db.collection(`restaurants/${rid}/${c}`).get()).docs) await d.ref.delete();
+      for (const c of ["inbox", "mailLog", "uberPayouts"]) for (const d of (await db.collection(`restaurants/${rid}/${c}`).get()).docs) await d.ref.delete();
       await db.doc(`restaurants/${rid}/settings/mail`).delete();
       await db.doc(`restaurants/${rid}/private/gmail`).delete();
     }
@@ -84,7 +84,7 @@ run("syncMail (émulateur)", () => {
 
     await db.doc("restaurants/19e/private/gmail").set({ refreshToken: "rt", adresse: "ava01012018@gmail.com" });
     const r = await syncMail("19e");
-    expect(r).toMatchObject({ status: "ok", messagesVus: 5, nouveaux: 3, doublons: 1, erreurs: 0 });
+    expect(r).toMatchObject({ status: "ok", messagesVus: 5, nouveaux: 2, uberAuto: 1, doublons: 1, erreurs: 0 });
 
     const inbox = await docs("19e");
     const hps = inbox.find((d) => d.id === "m1_0")!.item;
@@ -92,6 +92,16 @@ run("syncMail (émulateur)", () => {
     expect(hps.source).toMatchObject({ messageId: "m1", boite: "19e", attachment: "FAC-20261009-004512.pdf" });
     expect(inbox.find((d) => d.id === "m2_0")!.item).toMatchObject({ kind: "uber", date: "2026-10-15", montant: 478133, frais: 184069, brut: 780650 });
     expect(inbox.find((d) => d.id === "m2_0")!.item.incomplet).toBeUndefined();
+    // Récap Uber complet : enregistré directement comme versement de la semaine, sans passer par « À vérifier ».
+    expect(inbox.find((d) => d.id === "m2_0")).toMatchObject({ statut: "valide", auto: true });
+    expect((await db.doc("restaurants/19e/uberPayouts/mail-2026-10-05").get()).data()).toMatchObject({
+      date: "2026-10-15",
+      montant: 478133,
+      brut: 780650,
+      debut: "2026-10-05",
+      fin: "2026-10-11",
+      source: "mail",
+    });
     expect(inbox.some((d) => d.id === "m4_0")).toBe(false);
     // Facture Pennylane avec Prony en copie : déposée dans le portail du 17e.
     expect(inbox.some((d) => d.id === "m5_0")).toBe(false);

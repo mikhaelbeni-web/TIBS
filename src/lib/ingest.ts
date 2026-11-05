@@ -47,6 +47,13 @@ export interface InboxUber {
   brut?: number;
   frais?: number;
   reference?: string;
+  /** Semaine couverte par le récap hebdo (lundi → dimanche), lue dans l'objet du mail. */
+  debut?: string;
+  fin?: string;
+  /** Titres-restaurant versés à part (centimes). */
+  titres?: number;
+  /** Versement net du récap = versement bancaire + titres-restaurant (contrôle interne). */
+  versementNet?: number;
   incomplet?: boolean;
   lecture?: Lecture;
   lectureErreur?: string;
@@ -61,6 +68,34 @@ export interface InboxDoc {
   receivedAt: number;
   traiteLe?: number;
   relu?: number; // dernière relecture du PDF par l'IA
+  auto?: boolean; // enregistré sans validation manuelle (récap Uber complet et cohérent)
+}
+
+/**
+ * Récap Uber hebdomadaire lu entièrement dans le corps du mail (sans IA) : s'il est complet et cohérent,
+ * il est enregistré directement comme versement, pour que le pointage ticket Z ↔ Uber ↔ banque
+ * se fasse sans clic. Renvoie null s'il manque quelque chose : l'élément reste alors « À vérifier ».
+ */
+export function versementDuMail(item: InboxUber): { id: string; payout: { date: string; montant: number; brut: number; frais?: number; titres?: number; debut: string; fin: string; reference: string; source: "mail" } } | null {
+  const { date, montant, brut, debut, fin } = item;
+  if (!date || montant === undefined || brut === undefined || !debut || !fin) return null;
+  if (montant <= 0 || brut < montant) return null;
+  // Contrôle interne du récap : versement bancaire + titres-restaurant = versement net (à 1 € près).
+  if (item.versementNet !== undefined && Math.abs(montant + (item.titres ?? 0) - item.versementNet) > 100) return null;
+  return {
+    id: `mail-${debut}`,
+    payout: {
+      date,
+      montant,
+      brut,
+      ...(item.frais !== undefined ? { frais: item.frais } : {}),
+      ...(item.titres !== undefined ? { titres: item.titres } : {}),
+      debut,
+      fin,
+      reference: item.reference ?? `Semaine du ${debut} au ${fin}`,
+      source: "mail",
+    },
+  };
 }
 
 type Raw = Record<string, unknown>;
