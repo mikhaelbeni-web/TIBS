@@ -16,6 +16,7 @@ import { calme, cliquerTexte, diagnostic, lancer, pause, urlSansSecret, type Dia
 
 export interface DiagnosticUber extends Diagnostic {
   capture?: string; // JPEG en base64
+  journal?: string[]; // ce que le robot a fait, étape par étape
 }
 
 export type BesoinUber = "identifiants" | "code_sms" | "code_mail" | "anti_robot" | "page_inconnue";
@@ -40,6 +41,16 @@ export interface ConfigUber {
   jetonGmail?: () => Promise<string | null>;
   /** Demande le code au gérant dans l'app et attend sa saisie (null si rien dans le délai). */
   attendreCode?: (canal: "sms" | "mail" | "inconnu") => Promise<string | null>;
+  /** Code déjà tapé par le gérant dans l'app, sans attendre (consommé à la lecture). */
+  codeTape?: () => Promise<string | null>;
+  /** Montre la connexion en direct dans l'app : étape en cours, journal, capture d'écran. */
+  suivi?: (m: SuiviUber) => Promise<void>;
+}
+
+export interface SuiviUber {
+  etape: string;
+  journal: string[];
+  capture?: string;
 }
 
 /** Premier code obtenu : lu dans la boîte Gmail du restaurant, ou tapé par le gérant dans l'app. */
@@ -71,19 +82,44 @@ export interface SessionUber {
   page: Page;
   appels: string[];
   fermer: () => Promise<string>; // renvoie les cookies à garder
+  /** Ajoute une étape au journal et la montre dans l'app. */
+  noter: (etape: string) => Promise<void>;
 }
 
-async function capture(page: Page): Promise<string | undefined> {
+async function capture(page: Page, quality = 55): Promise<string | undefined> {
   try {
-    const img = await page.screenshot({ type: "jpeg", quality: 55, fullPage: false });
+    const img = await page.screenshot({ type: "jpeg", quality, fullPage: false });
     return Buffer.from(img).toString("base64");
   } catch {
     return undefined;
   }
 }
 
-async function diag(page: Page, etape: string, appels: string[]): Promise<DiagnosticUber> {
-  return { ...(await diagnostic(page, etape, appels)), capture: await capture(page) };
+async function diag(page: Page, etape: string, appels: string[], journal?: string[]): Promise<DiagnosticUber> {
+  return { ...(await diagnostic(page, etape, appels)), capture: await capture(page), ...(journal ? { journal: journal.slice(-30) } : {}) };
+}
+
+/** Résumé des champs et boutons visibles : sert au journal quand le robot ne reconnaît pas la page. */
+async function elementsVisibles(page: Page): Promise<string> {
+  return page
+    .evaluate(() => {
+      const vis = (e: Element) => (e as HTMLElement).offsetParent !== null;
+      const champs = [...document.querySelectorAll("input, textarea, select")]
+        .filter(vis)
+        .map((e) => {
+          const i = e as HTMLInputElement;
+          const attrs = [i.type && `type=${i.type}`, i.id && `id=${i.id}`, i.name && `name=${i.name}`, i.getAttribute("autocomplete") && `ac=${i.getAttribute("autocomplete")}`, i.getAttribute("inputmode") && `im=${i.getAttribute("inputmode")}`];
+          return `${i.tagName.toLowerCase()}[${attrs.filter(Boolean).join(" ")}]`;
+        });
+      const boutons = [...document.querySelectorAll("button, a, [role=button]")]
+        .filter(vis)
+        .map((b) => (b as HTMLElement).innerText.trim().replace(/\s+/g, " ").slice(0, 40))
+        .filter(Boolean)
+        .slice(0, 15);
+      const cadres = [...document.querySelectorAll("iframe")].map((f) => (f as HTMLIFrameElement).src.split("?")[0].slice(0, 80));
+      return `champs: ${champs.join(", ") || "aucun"} | boutons: ${boutons.join(" / ") || "aucun"}${cadres.length ? ` | iframes: ${cadres.join(", ")}` : ""}`;
+    })
+    .catch(() => "(page illisible)");
 }
 
 const texte = (page: Page) => page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
@@ -96,7 +132,11 @@ async function visible(page: Page, selecteur: string) {
 
 const SEL_EMAIL = ["#PHONE_NUMBER_or_EMAIL_ADDRESS", "input[type=email]", "input[name=email]", "input[autocomplete=username]", "input[name*=email i]"].join(", ");
 const SEL_MDP = ["#PASSWORD", "input[type=password]"].join(", ");
-const SEL_CODE = ["input[autocomplete=one-time-code]", "input[id*=OTP]", "input[name*=otp i]", "input[id*=code i]", "input[name*=code i]"].join(", ");
+// Champs qui ne servent qu'à un code (sûrs), puis champs plausibles quand la page parle d'un code.
+const SEL_CODE_SUR = ["input[autocomplete=one-time-code]", "input[id*=OTP]", "input[name*=otp i]"].join(", ");
+const SEL_CODE = [SEL_CODE_SUR, "input[id*=code i]", "input[name*=code i]", "input[inputmode=numeric]"].join(", ");
+// Champ quelconque où taper un code tapé par le gérant quand la page n'est pas reconnue.
+const SEL_SAISIE = "input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=email]):not([type=password]):not([type=submit]):not([type=search])";
 
 async function valider(page: Page) {
   const bouton = await visible(page, "#forward-button, button[type=submit]");
@@ -122,9 +162,9 @@ async function codeParMail(jeton: string, depuis: number): Promise<string | null
   return null;
 }
 
-async function taperCode(page: Page, code: string) {
+async function taperCode(page: Page, code: string, selecteur = SEL_CODE) {
   const champs = [];
-  for (const el of await page.$$(SEL_CODE + ", input[inputmode=numeric]")) if (await el.isVisible().catch(() => false)) champs.push(el);
+  for (const el of await page.$$(selecteur)) if (await el.isVisible().catch(() => false)) champs.push(el);
   if (champs.length > 1) {
     // Une case par chiffre.
     for (let i = 0; i < Math.min(champs.length, code.length); i++) await champs[i].type(code[i], { delay: 40 });
@@ -169,20 +209,37 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
         /* cookies illisibles : connexion complète */
       }
     }
+    const debut = Date.now();
+    const journal: string[] = [];
+    const ou = () => {
+      try {
+        const u = new URL(page.url());
+        return (u.host + u.pathname).slice(0, 50);
+      } catch {
+        return "";
+      }
+    };
+    /** Note une étape dans le journal et la montre en direct dans l'app (avec une capture légère). */
+    const note = async (m: string) => {
+      journal.push(`${Math.round((Date.now() - debut) / 1000)} s · ${m}${ou() ? ` (${ou()})` : ""}`);
+      if (cfg.suivi) await cfg.suivi({ etape: m, journal: journal.slice(-20), capture: await capture(page, 35) }).catch(() => {});
+    };
+    const d = (etape: string) => diag(page, etape, appels, journal);
+
     await page.goto(UBER_MANAGER_URL, { waitUntil: "networkidle2", timeout: 40_000 }).catch(() => {});
     await calme(page);
-
-    const debut = Date.now();
-    for (let etape = 0; etape < 8 && !surManager(page); etape++) {
+    await note(cfg.cookies ? "Uber ouvert avec la session gardée" : "Uber ouvert (pas de session gardée)");
+    for (let etape = 0; etape < 10 && !surManager(page); etape++) {
       const t = await texte(page);
-      if (antiRobot(t)) throw new UberError("Uber demande une vérification anti-robot : connexion automatique impossible pour l'instant.", await diag(page, "connexion", appels), "anti_robot");
+      if (antiRobot(t)) throw new UberError("Uber demande une vérification anti-robot : connexion automatique impossible pour l'instant.", await d("anti-robot"), "anti_robot");
 
       const mdp = await visible(page, SEL_MDP);
       if (mdp && !cfg.motDePasse) {
         // Pas de mot de passe enregistré : on demande plutôt un code si Uber le propose.
         if (!(await cliquerTexte(page, "^(plus d.options|more options|autres options|recevoir un code|envoyer (un|le) code|send code|code par (e-?mail|sms))$"))) {
-          throw new UberError("Uber demande un mot de passe pour ce compte : ajoute-le dans Réglages.", await diag(page, "mot de passe", appels), "identifiants");
+          throw new UberError("Uber demande un mot de passe pour ce compte : ajoute-le dans Réglages.", await d("mot de passe"), "identifiants");
         }
+        await note("Uber propose un mot de passe : on choisit plutôt le code");
         await pause(1_000);
         await cliquerTexte(page, "(code|e-?mail|sms)");
         await calme(page);
@@ -192,14 +249,15 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
         await mdp.click({ count: 3 });
         await mdp.type(cfg.motDePasse, { delay: 25 });
         await valider(page);
+        await note("Mot de passe envoyé à Uber");
         const encore = await visible(page, SEL_MDP);
         if (encore && /incorrect|invalide|wrong|erreur/i.test(await texte(page))) {
-          throw new UberError("Uber refuse le mot de passe : vérifie-le dans Réglages.", await diag(page, "mot de passe", appels), "identifiants");
+          throw new UberError("Uber refuse le mot de passe : vérifie-le dans Réglages.", await d("mot de passe"), "identifiants");
         }
         continue;
       }
 
-      const code = demandeCode(t) && (await visible(page, SEL_CODE + ", input[inputmode=numeric]"));
+      const code = (await visible(page, SEL_CODE_SUR)) ?? (demandeCode(t) ? await visible(page, SEL_CODE) : null);
       if (code) {
         // On préfère le mot de passe quand Uber propose « Plus d'options ».
         if (cfg.motDePasse && etape < 3 && (await cliquerTexte(page, "^(plus d.options|more options|autres options)$"))) {
@@ -210,18 +268,23 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
           }
         }
         const canal = demandeCode(t) ?? "inconnu";
+        await note(`Uber demande un code${canal === "sms" ? " envoyé par SMS" : canal === "mail" ? " envoyé par mail" : ""} : tape-le dans l'app`);
         const lu = await obtenirCode(cfg, canal, debut);
         if (!lu) {
           throw new UberError(
             cfg.attendreCode
               ? "Uber a demandé un code de vérification et il n'a pas été saisi à temps (2 minutes). Relance et tape le code dès qu'il arrive."
               : "Uber demande un code de vérification : lance le robot depuis l'app (« Relever maintenant ») pour pouvoir le saisir.",
-            await diag(page, "code", appels),
+            await d("code"),
             canal === "sms" ? "code_sms" : "code_mail",
           );
         }
         await taperCode(page, lu);
         await valider(page);
+        await note("Code tapé dans Uber");
+        if ((await visible(page, SEL_CODE)) && /incorrect|invalide|n.est pas valide|wrong|invalid/i.test(await texte(page))) {
+          throw new UberError("Uber refuse le code (incorrect ou expiré). Relance et tape le dernier code reçu.", await d("code refusé"), "code_mail");
+        }
         continue;
       }
 
@@ -230,15 +293,28 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
         await email.click({ count: 3 });
         await email.type(cfg.email, { delay: 25 });
         await valider(page);
+        await note(`E-mail ${cfg.email} envoyé à Uber`);
         continue;
       }
 
-      // Bouton « Se connecter » sur une page d'accueil.
-      if (!(await cliquerTexte(page, "^(se connecter|connexion|sign in|log in)$"))) await pause(2_000);
+      // Page non reconnue : si le gérant a déjà tapé un code dans l'app et qu'il y a une case, on l'y met.
+      const saisie = cfg.codeTape && (await visible(page, SEL_SAISIE)) ? await cfg.codeTape() : null;
+      if (saisie) {
+        await taperCode(page, saisie, SEL_SAISIE);
+        await valider(page);
+        await note("Code tapé dans la page (page non reconnue)");
+        continue;
+      }
+      // Sinon : bouton « Se connecter » d'une page d'accueil, ou option « code par e-mail ».
+      await note(`Page non reconnue : ${await elementsVisibles(page)}`);
+      if (await cliquerTexte(page, "^(se connecter|connexion|sign in|log in)$")) await note("Clic sur « Se connecter »");
+      else if (await cliquerTexte(page, "(code|e-?mail).*(e-?mail|code)|^envoyer un code|^send code")) await note("Clic sur l'option code par e-mail");
+      else await pause(2_500);
       await calme(page);
     }
-    if (!surManager(page)) throw new UberError("Connexion à Uber Eats Manager non aboutie.", await diag(page, "connexion", appels), "page_inconnue");
-    return { page, appels, fermer };
+    if (!surManager(page)) throw new UberError("Connexion à Uber Eats Manager non aboutie.", await d("connexion"), "page_inconnue");
+    await note("Connecté à Uber Eats Manager");
+    return { page, appels, fermer, noter: note };
   } catch (e) {
     await browser.close().catch(() => {});
     if (e instanceof UberError) throw e;

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { useRestaurant } from "@/components/RestaurantProvider";
-import { apiUber, CodeUber, RobotUber, useEtatUber, VueRobot, type DiagnosticUber, type ErreurRobot } from "@/components/UberEats";
+import { apiUber, RobotUber, useEtatUber, VueRobot, type DiagnosticUber, type ErreurRobot } from "@/components/UberEats";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Sheet } from "@/components/ui";
 import {
   bilan,
@@ -107,7 +107,6 @@ export default function ContestationsPage() {
         Suivi des erreurs de commande signalées par les clients. Seules les commandes marquées « Problème facturé » ou « Remboursement effectué par Uber » sont mises à contester.
       </p>
       <RobotUber onFini={recharger} />
-      <CodeUber />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi titre="Retenu par Uber" valeur={formatEuros(total.retenu)} sous={total.sansMontant ? `${total.sansMontant} sans montant` : `${total.nombre} commande(s)`} />
