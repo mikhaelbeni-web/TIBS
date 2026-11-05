@@ -7,7 +7,8 @@ import { dechiffrer, type Chiffre } from "@/lib/server/secretBox";
 export const maxDuration = 120;
 
 /**
- * POST /api/laddition/extraire?r=19e&mois=2026-10 (gérant) : le robot lit L'Addition et
+ * POST /api/laddition/extraire?r=19e&mois=2026-10 (gérant) : le robot télécharge l'export « Détails par service »
+ * du mois (repli : texte de Comptabilité CA/TVA) et
  * enregistre les chiffres du mois dans restaurants/{rid}/settings/caMensuel (champ {mois}) s'ils sont complets,
  * cohérents (10 % + 20 % + 5,5 % = CA TTC net) et pour le bon mois. Sinon : erreur + diagnostic.
  */
@@ -33,12 +34,13 @@ export async function POST(request: Request) {
 
   try {
     const r = await extraireMois({ identifiant: priv.identifiant, motDePasse, etablissement: priv.etablissement || undefined, mois });
+    const export_ = r.noteExport ? ` Export Excel : ${r.noteExport}.` : "";
     const manquants = Object.entries(r.chiffres).filter(([, v]) => v === null).map(([k]) => k);
     if (!r.periodeConfirmee) {
-      return Response.json({ error: `Je n'ai pas réussi à sélectionner ${mois} dans L'Addition.`, diagnostic: r.diagnostic }, { status: 422 });
+      return Response.json({ error: `Je n'ai pas réussi à sélectionner ${mois} dans L'Addition.${export_}`, diagnostic: r.diagnostic }, { status: 422 });
     }
     if (manquants.length) {
-      return Response.json({ error: `Chiffres introuvables sur la page : ${manquants.join(", ")}.`, diagnostic: r.diagnostic }, { status: 422 });
+      return Response.json({ error: `Chiffres introuvables sur la page : ${manquants.join(", ")}.${export_}`, diagnostic: r.diagnostic }, { status: 422 });
     }
     const chiffres = r.chiffres as ChiffresCa;
     const doc: CaMensuel = { mois, ...chiffres, source: "laddition", majLe: Date.now() };

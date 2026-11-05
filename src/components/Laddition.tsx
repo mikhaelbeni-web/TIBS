@@ -1,12 +1,13 @@
 "use client";
 
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { useRestaurant } from "@/components/RestaurantProvider";
 import { Badge, Button, Card, ErrorBox, Field, Input } from "@/components/ui";
 import { db } from "@/lib/firebase";
 import { CHAMPS_CA, chiffresCoherents, montantFr, parseMontantFr, type CaMensuel, type ChiffresCa } from "@/lib/laddition";
+import { chiffresDuMois, lignesXlsx, lireExportServices, periodeDuNom, problemeExport } from "@/lib/ladditionExport";
 
 type User = { getIdToken: () => Promise<string> };
 
@@ -161,6 +162,33 @@ export function LadditionCa({ mois, ca }: { mois: string; ca?: CaMensuel }) {
   const [diag, setDiag] = useState<string | null>(null);
   const [edition, setEdition] = useState<Record<keyof ChiffresCa, string> | null>(null);
   const [copie, setCopie] = useState(false);
+  const [info, setInfo] = useState<string | null>(null);
+  const fichier = useRef<HTMLInputElement>(null);
+
+  /** Import du fichier Excel « Détails par service » exporté depuis L'Addition. */
+  async function importer(file: File) {
+    setError(null);
+    setInfo(null);
+    setBusy(true);
+    try {
+      const exp = lireExportServices(await lignesXlsx(await file.arrayBuffer()));
+      const periode = periodeDuNom(file.name);
+      const r = chiffresDuMois(exp, mois, periode);
+      const pb = problemeExport(r, mois, periode);
+      if (pb) throw new Error(pb);
+      const entree: CaMensuel = { mois, ...r.chiffres, source: "export", majLe: Date.now(), coherent: chiffresCoherents(r.chiffres) };
+      await setDoc(doc(db(), "restaurants", rid, "settings", "caMensuel"), { [mois]: entree }, { merge: true });
+      setInfo(
+        `${r.nbServices} services importés${exp.etablissement ? ` (${exp.etablissement})` : ""}.` +
+          (r.complet === null ? " Période du fichier inconnue : vérifie qu'il couvre bien tout le mois." : ""),
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      if (fichier.current) fichier.current.value = "";
+    }
+  }
 
   async function extraire() {
     if (!user) return;
@@ -208,7 +236,7 @@ export function LadditionCa({ mois, ca }: { mois: string; ca?: CaMensuel }) {
         <div className="font-medium">Chiffres L&rsquo;Addition · {nomMois(mois)}</div>
         {ca && (
           <Badge tone={ca.coherent === false ? "orange" : "green"}>
-            {ca.source === "laddition" ? "Relevé L'Addition" : "Saisi à la main"} · {dateFr(ca.majLe)}
+            {{ laddition: "Relevé L'Addition", export: "Export L'Addition", manuel: "Saisi à la main" }[ca.source]} · {dateFr(ca.majLe)}
           </Badge>
         )}
       </div>
@@ -254,7 +282,17 @@ export function LadditionCa({ mois, ca }: { mois: string; ca?: CaMensuel }) {
             <Button onClick={extraire} disabled={busy}>
               {busy ? "Lecture de L'Addition… (≈ 30 s)" : ca ? "Relire L'Addition" : "Relever dans L'Addition"}
             </Button>
-            <Button variant="secondary" onClick={editer} disabled={busy}>
+            <Button variant="secondary" onClick={() => fichier.current?.click()} disabled={busy}>
+              Importer l&rsquo;export Excel
+            </Button>
+            <input
+              ref={fichier}
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && importer(e.target.files[0])}
+            />
+            <Button variant="ghost" onClick={editer} disabled={busy}>
               Saisir à la main
             </Button>
             {ca && (
@@ -265,7 +303,13 @@ export function LadditionCa({ mois, ca }: { mois: string; ca?: CaMensuel }) {
           </>
         )}
       </div>
+      {info && <p className="text-sm text-success">{info}</p>}
       <ErrorBox message={error} />
+      {!ca && !edition && (
+        <p className="text-xs text-muted">
+          Export : dans L&rsquo;Addition, détail des services, du 1er au dernier jour du mois, puis export Excel.
+        </p>
+      )}
       {diag && (
         <details className="text-xs">
           <summary className="cursor-pointer text-muted">Ce que le robot a vu (à transmettre pour corriger)</summary>

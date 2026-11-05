@@ -1,5 +1,9 @@
 import "server-only";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { bornesMois, extraireChiffres, type ChiffresCa } from "@/lib/laddition";
+import { chiffresDuMois, lignesXlsx, lireExportServices, periodeDuNom, problemeExport } from "@/lib/ladditionExport";
 
 /**
  * Robot qui ouvre L'Addition (reporting.laddition.com) dans un Chromium sans écran,
@@ -31,6 +35,10 @@ export class LadditionError extends Error {
 export interface Extraction {
   chiffres: Record<keyof ChiffresCa, number | null>;
   periodeConfirmee: boolean;
+  /** export : fichier « Détails par service » téléchargé ; page : texte de Comptabilité CA/TVA. */
+  methode: "export" | "page";
+  /** Pourquoi l'export n'a pas servi, le cas échéant. */
+  noteExport?: string;
   diagnostic: Diagnostic;
 }
 
@@ -159,11 +167,18 @@ async function connexion(page: Page, identifiant: string, motDePasse: string, ap
   }
 }
 
-/** Le texte de la page mentionne-t-il le mois demandé ? */
-function moisAffiche(texte: string, mois: string): boolean {
+/**
+ * Le texte de la page mentionne-t-il le mois demandé ?
+ * strict : le premier ET le dernier jour du mois doivent apparaître (un « 6 octobre 2026 – 5 novembre 2026 »
+ * ne doit pas passer pour octobre complet).
+ */
+export function moisAffiche(texte: string, mois: string, strict = false): boolean {
   const [y, m] = mois.split("-");
   const { debut, fin } = bornesMois(mois);
   const fr = (iso: string) => iso.split("-").reverse().join("/");
+  const court = (iso: string) => fr(iso).slice(0, 6) + iso.slice(2, 4);
+  const present = (iso: string) => texte.includes(iso) || texte.includes(fr(iso)) || new RegExp(`${court(iso)}\\b`).test(texte);
+  if (strict) return present(debut) && present(fin);
   const nom = MOIS_FR[Number(m) - 1];
   return (
     texte.includes(fr(debut)) ||
@@ -175,15 +190,19 @@ function moisAffiche(texte: string, mois: string): boolean {
 }
 
 /** Essaie de choisir le mois : URL avec dates, sinon deux champs date visibles. */
-async function choisirMois(page: Page, mois: string): Promise<boolean> {
-  const texte = () => page.evaluate(() => document.body.innerText);
-  if (moisAffiche(await texte(), mois)) return true;
+async function choisirMois(page: Page, mois: string, strict = false): Promise<boolean> {
+  // Texte visible + valeurs des champs (sélecteurs de dates) + adresse de la page.
+  const texte = () =>
+    page.evaluate(
+      () => `${document.body.innerText}\n${[...document.querySelectorAll("input")].map((i) => i.value).join("\n")}\n${decodeURIComponent(location.href)}`,
+    );
+  if (moisAffiche(await texte(), mois, strict)) return true;
 
   const url = urlPourMois(page.url(), mois);
   if (url) {
     await page.goto(url, { waitUntil: "networkidle2", timeout: 30_000 }).catch(() => {});
     await calme(page);
-    if (moisAffiche(await texte(), mois)) return true;
+    if (moisAffiche(await texte(), mois, strict)) return true;
   }
 
   const { debut, fin } = bornesMois(mois);
@@ -209,9 +228,68 @@ async function choisirMois(page: Page, mois: string): Promise<boolean> {
     await page.keyboard.press("Escape").catch(() => {});
     await cliquerTexte(page, "^(valider|appliquer|rechercher|ok)$");
     await calme(page);
-    if (moisAffiche(await texte(), mois)) return true;
+    if (moisAffiche(await texte(), mois, strict)) return true;
   }
   return false;
+}
+
+/**
+ * Voie principale : page « détail des services » (/v2/shift-details), période = le mois, export Excel.
+ * Le fichier donne exactement les chiffres de Comptabilité CA/TVA (vérifié sur octobre 2026). Sa période
+ * (dans son nom, sinon les dates affichées sur la page) prouve que c'est bien le mois complet.
+ */
+async function parExport(page: Page, mois: string): Promise<{ chiffres: ChiffresCa } | { note: string }> {
+  await page.goto(new URL("v2/shift-details", LADDITION_URL).toString(), { waitUntil: "networkidle2", timeout: 30_000 });
+  await calme(page);
+  const moisChoisi = await choisirMois(page, mois, true);
+
+  const dossier = await mkdtemp(path.join(tmpdir(), "laddition-"));
+  let recu: { nom: string; data: ArrayBuffer } | null = null;
+  const surReponse = async (r: import("puppeteer-core").HTTPResponse) => {
+    const type = r.headers()["content-type"] ?? "";
+    if (!/spreadsheetml|ms-excel|octet-stream/i.test(type)) return;
+    const dispo = r.headers()["content-disposition"] ?? "";
+    const nom = decodeURIComponent(dispo.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)?.[1] ?? path.basename(new URL(r.url()).pathname));
+    const buf = await r.buffer().catch(() => null);
+    if (buf) recu = { nom, data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer };
+  };
+  page.on("response", surReponse);
+  try {
+    // Les téléchargements se règlent au niveau du navigateur (une session CDP de page ne suffit pas).
+    const cdp = await page.browser().target().createCDPSession();
+    let suggere = "";
+    let termine = false;
+    cdp.on("Browser.downloadWillBegin", (e) => (suggere = e.suggestedFilename));
+    cdp.on("Browser.downloadProgress", (e) => (termine ||= e.state === "completed"));
+    await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dossier, eventsEnabled: true });
+
+    if (!(await cliquerTexte(page, "^(exporter|export|t[ée]l[ée]charger|excel)\\b"))) return { note: "bouton d'export introuvable" };
+    await pause(800);
+    await cliquerTexte(page, "^(excel|xlsx|format excel|exporter en excel)$");
+
+    // Chrome peut enregistrer le fichier sous un autre nom : le nom d'origine (avec la période) vient de l'événement.
+    for (let i = 0; i < 50 && !recu; i++) {
+      const f = (await readdir(dossier)).find((n) => !n.endsWith(".crdownload"));
+      if (f && termine) {
+        const b = await readFile(path.join(dossier, f));
+        recu = { nom: suggere || f, data: b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer };
+      } else await pause(500);
+    }
+    const fichier = recu as { nom: string; data: ArrayBuffer } | null;
+    if (!fichier) return { note: "aucun fichier Excel reçu après l'export" };
+
+    const exp = lireExportServices(await lignesXlsx(fichier.data));
+    // Période : celle du nom du fichier, sinon celle affichée sur la page si le mois a bien été sélectionné.
+    const periode = periodeDuNom(fichier.nom) ?? (moisChoisi ? bornesMois(mois) : null);
+    const r = chiffresDuMois(exp, mois, periode);
+    const pb = problemeExport(r, mois, periode) ?? (r.complet === null ? `période du fichier « ${fichier.nom} » inconnue` : null);
+    return pb ? { note: pb } : { chiffres: r.chiffres };
+  } catch (e) {
+    return { note: (e as Error).message };
+  } finally {
+    page.off("response", surReponse);
+    await rm(dossier, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export async function extraireMois(opts: { identifiant: string; motDePasse: string; etablissement?: string; mois: string }): Promise<Extraction> {
@@ -233,16 +311,28 @@ export async function extraireMois(opts: { identifiant: string; motDePasse: stri
       await calme(page);
     }
 
-    // Comptabilité > Comptabilité CA/TVA.
+    const exp = await parExport(page, opts.mois).catch((e: Error) => ({ note: e.message }));
+    if ("chiffres" in exp) {
+      return { chiffres: exp.chiffres, periodeConfirmee: true, methode: "export", diagnostic: await diagnostic(page, "export", appels) };
+    }
+
+    // Repli : Comptabilité > Comptabilité CA/TVA, lecture du texte de la page.
+    await page.goto(LADDITION_URL, { waitUntil: "networkidle2", timeout: 30_000 }).catch(() => {});
     await cliquerTexte(page, "^comptabilit[ée]s?$");
     await pause(800);
     const ok = await cliquerTexte(page, "CA\\s*/\\s*TVA");
-    if (!ok) throw new LadditionError("Menu « Comptabilité CA/TVA » introuvable.", await diagnostic(page, "menu", appels));
+    if (!ok) throw new LadditionError(`Export : ${exp.note}. Menu « Comptabilité CA/TVA » introuvable.`, await diagnostic(page, "menu", appels));
     await calme(page);
 
     const periodeConfirmee = await choisirMois(page, opts.mois);
     const texte = await page.evaluate(() => document.body.innerText);
-    return { chiffres: extraireChiffres(texte), periodeConfirmee, diagnostic: await diagnostic(page, "lecture", appels) };
+    return {
+      chiffres: extraireChiffres(texte),
+      periodeConfirmee,
+      methode: "page",
+      noteExport: exp.note,
+      diagnostic: await diagnostic(page, "lecture", appels),
+    };
   } catch (e) {
     if (e instanceof LadditionError) throw e;
     throw new LadditionError(`Robot L'Addition : ${(e as Error).message}`);
