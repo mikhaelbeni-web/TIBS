@@ -101,6 +101,8 @@ export interface UberJourDoc {
   date: string;
   commandes: number;
   ventes: number; // centimes TTC
+  /** Premier / dernier jour d'un export : des commandes peuvent manquer. */
+  partiel?: boolean;
   createdAt: number;
 }
 

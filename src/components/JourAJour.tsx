@@ -106,10 +106,10 @@ export function JourAJour({
       ),
     [jour, cash, credits, toutes, maxDays, maxFee],
   );
-  const uberJour = comparerUberJour(
-    { montant: entry?.uber ?? 0, commandes: entry?.uberCommandes },
-    uberJours.find((u) => u.date === jour),
-  );
+  const uberDuJour = uberJours.find((u) => u.date === jour);
+  const uberJourBrut = comparerUberJour({ montant: entry?.uber ?? 0, commandes: entry?.uberCommandes }, uberDuJour);
+  // Jour au bord d'un export Uber : un écart peut venir des commandes manquantes, pas encore une alerte.
+  const uberJour = uberDuJour?.partiel && uberJourBrut.statut === "ecart" ? { ...uberJourBrut, statut: "attente" as const } : uberJourBrut;
   const ubersCaisse: CashLine[] = cash.filter((c) => c.uber !== undefined).map((c) => ({ id: c.id, date: c.date, amount: c.uber ?? 0 }));
   const uberSemaine = comparerUber(jour, ubersCaisse, uber);
   const uberBanque = comparerUberBanque(
@@ -245,6 +245,9 @@ export function JourAJour({
                 <Ligne label="Uber Eats ce jour">
                   {uberJour.uber.commandes} cmd · {formatEuros(uberJour.uber.ventes)}
                 </Ligne>
+                {uberDuJour?.partiel && (
+                  <p className="text-xs text-muted">Jour en bord d&apos;export Uber : importe aussi la période voisine pour avoir toutes ses commandes.</p>
+                )}
                 {uberJour.statut === "ecart" && (
                   <p className="text-xs text-danger">
                     {uberJour.ecartCommandes ? `${uberJour.ecartCommandes > 0 ? "+" : ""}${uberJour.ecartCommandes} commande(s) côté Uber. ` : ""}

@@ -74,8 +74,8 @@ describe("ticket Z", () => {
       { datedelacommande: "05/11/2026 12:00", ventesttc: "20", statut: "Livrée" },
     ]);
     expect(jours).toEqual([
-      { date: "2026-11-04", commandes: 2, ventes: 4604 },
-      { date: "2026-11-05", commandes: 1, ventes: 2000 },
+      { date: "2026-11-04", commandes: 2, ventes: 4604, partiel: true },
+      { date: "2026-11-05", commandes: 1, ventes: 2000, partiel: true },
     ]);
   });
 });
@@ -135,5 +135,29 @@ describe("remises CB Caisse d'Épargne", () => {
   it("écart si la somme ne colle pas", () => {
     const r = comparerCB("2026-10-30", [{ id: "z", date: "2026-10-30", amount: 160000 }], [], { lignes, today: "2026-11-05" });
     expect(r).toMatchObject({ statut: "ecart", ecart: -9950 });
+  });
+});
+
+describe("export Historique des commandes du Manager Uber Eats", () => {
+  // En-têtes déjà normalisés comme le fait readSpreadsheet.
+  const ligne = (date: string, heure: string, montant: string, statut = "completed") => ({
+    datedelacommande: date,
+    heuredelacommande: `${date} ${heure}.000`,
+    montantmoyendescommandes: montant,
+    statutdelacommande: statut,
+  });
+  it("compte les commandes, ignore annulées et non honorées, range l'après-minuit sur la veille", () => {
+    const jours = rowsToUberJours([
+      ligne("2026-10-04", "12:00:00", "42.0"),
+      ligne("2026-10-05", "21:04:28", "42.0"),
+      ligne("2026-10-05", "23:10:00", "18.0"),
+      ligne("2026-10-06", "00:21:15", "20.0"),
+      ligne("2026-10-05", "22:00:00", "0.0", "canceled"),
+      ligne("2026-10-05", "22:30:00", "25.0", "unfulfilled"),
+      ligne("2026-10-07", "12:00:00", "10.0"),
+    ]);
+    expect(jours.find((j) => j.date === "2026-10-05")).toEqual({ date: "2026-10-05", commandes: 3, ventes: 8000 });
+    expect(jours[0].partiel).toBe(true);
+    expect(jours.at(-1)?.partiel).toBe(true);
   });
 });

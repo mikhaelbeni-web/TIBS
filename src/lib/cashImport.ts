@@ -95,6 +95,11 @@ export interface UberJourDraft {
   date: string;
   commandes: number;
   ventes: number; // centimes TTC
+  /**
+   * Journée au bord de l'export (premier ou dernier jour) : il peut lui manquer des commandes,
+   * par exemple celles d'après minuit qui sont dans l'export du mois suivant.
+   */
+  partiel?: boolean;
 }
 
 const AVANT_BASCULE = 6; // une commande à 00:30 compte dans la journée de la veille, comme le Z
@@ -113,15 +118,21 @@ function heureDe(v: unknown): number | null {
  */
 export function rowsToUberJours(rows: Row[]): UberJourDraft[] {
   const parJour = new Map<string, UberJourDraft>();
+  let premier = "9999";
+  let dernier = "";
   for (const row of rows) {
     const brut = pick(row, ["date de la commande", "date commande", "order date", "date et heure", "date", "jour"]);
     let date = toIsoDate(typeof brut === "string" ? brut.trim().split(/[ T]/)[0] : brut);
     if (!date) continue;
+    if (date < premier) premier = date;
+    if (date > dernier) dernier = date;
     const statut = String(pick(row, ["statut", "statut de la commande", "order status", "status"]) ?? "").toLowerCase();
-    if (/annul|cancel|refus|echou|échou|failed/.test(statut)) continue;
+    if (/annul|cancel|refus|echou|échou|failed|unfulfilled/.test(statut)) continue;
     const h = heureDe(pick(row, ["heure", "heure de la commande", "order time", "heure de commande"]) ?? brut);
     if (h !== null && h < AVANT_BASCULE) date = new Date(Date.parse(`${date}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
-    const ventes = toCents(pick(row, ["ventes ttc", "ventes", "total des ventes", "montant ttc", "total ttc", "sales incl vat", "sales", "gross sales", "total", "montant"]));
+    // Export « Historique des commandes » du Manager : le montant de la commande est dans
+    // « Montant moyen des commandes » (moyenne sur une seule commande).
+    const ventes = toCents(pick(row, ["montant moyen des commandes", "ventes ttc", "ventes", "total des ventes", "montant ttc", "total ttc", "sales incl vat", "sales", "gross sales", "total", "montant"]));
     if (ventes === null) continue;
     const n = toCents(pick(row, ["commandes", "nombre de commandes", "nb commandes", "orders", "order count"]));
     const d = parJour.get(date) ?? { date, commandes: 0, ventes: 0 };
@@ -129,5 +140,7 @@ export function rowsToUberJours(rows: Row[]): UberJourDraft[] {
     d.ventes += ventes;
     parJour.set(date, d);
   }
-  return [...parJour.values()].sort((a, b) => a.date.localeCompare(b.date));
+  return [...parJour.values()]
+    .map((d) => (d.date <= premier || d.date >= dernier ? { ...d, partiel: true } : d))
+    .sort((a, b) => a.date.localeCompare(b.date));
 }
