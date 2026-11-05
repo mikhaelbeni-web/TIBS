@@ -99,3 +99,24 @@ describe("normaliserPem", () => {
     expect(normaliserPem("2307a280.pem")).toHaveProperty("erreur");
   });
 });
+
+import { appelLectureSeule } from "../banque";
+
+describe("verrou lecture seule", () => {
+  it("autorise uniquement la lecture", () => {
+    expect(appelLectureSeule("GET", "/aspsps?country=FR&service=AIS")).toBe(true);
+    expect(appelLectureSeule("POST", "/auth")).toBe(true);
+    expect(appelLectureSeule("POST", "/sessions")).toBe(true);
+    expect(appelLectureSeule("DELETE", "/sessions/abc-123")).toBe(true);
+    expect(appelLectureSeule("GET", "/accounts/7f3e-11/transactions?date_from=2026-10-01&continuation_key=x")).toBe(true);
+  });
+  it("refuse paiements, virements et tout autre appel", () => {
+    expect(appelLectureSeule("POST", "/payments")).toBe(false);
+    expect(appelLectureSeule("GET", "/payments/123")).toBe(false);
+    expect(appelLectureSeule("POST", "/accounts/1/transactions")).toBe(false);
+    expect(appelLectureSeule("GET", "/accounts/1/transactions/../../payments")).toBe(false);
+    expect(appelLectureSeule("GET", "/aspsps/payments")).toBe(false);
+    expect(appelLectureSeule("PUT", "/sessions/1")).toBe(false);
+    expect(appelLectureSeule("GET", "/accounts/1/balances")).toBe(false);
+  });
+});
