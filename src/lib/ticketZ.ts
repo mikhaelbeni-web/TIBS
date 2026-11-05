@@ -87,6 +87,10 @@ export interface ComparaisonCB {
   caisse: number;
   banque?: { date: string; montant: number; libelle: string; jours: number };
   ecart?: number; // banque - caisse (négatif = commission)
+  /** Remises lues par la date du libellé (« CB TIB S 301026 »), une par contrat TPE. */
+  remises?: BankLine[];
+  /** Frais « CB COM … » de ces remises (centimes, positifs). */
+  frais?: number;
   /** Crédits bancaires des jours suivants, pour vérifier à l'œil quand rien n'est rapproché. */
   candidats: BankLine[];
 }
@@ -95,13 +99,54 @@ export interface ComparaisonCB {
  * CB du jour contre remise en banque. On rapproche sur une fenêtre autour du jour pour qu'une
  * remise ne soit pas attribuée à deux jours (même algorithme que le pointage du mois).
  */
+/** « 2026-10-30 » → « 301026 », la date des libellés de remise CB (Caisse d'Épargne). */
+export const codeLibelle = (iso: string) => `${iso.slice(8, 10)}${iso.slice(5, 7)}${iso.slice(2, 4)}`;
+
+const REMISE = /\bCB\b(?!\s*COM)\D*?(\d{6})\b/i;
+const FRAIS = /\bCB\s*COM\D*?(\d{6})\b/i;
+
+/** Remises CB et frais dont le libellé porte la date donnée. */
+export function remisesDuJour(jour: string, lignes: BankLine[]): { remises: BankLine[]; frais: number } {
+  const code = codeLibelle(jour);
+  const remises = lignes.filter((b) => b.amount > 0 && REMISE.exec(b.libelle)?.[1] === code);
+  const frais = lignes
+    .filter((b) => b.amount < 0 && FRAIS.exec(b.libelle)?.[1] === code)
+    .reduce((s, b) => s - b.amount, 0);
+  return { remises, frais };
+}
+
 export function comparerCB(
   jour: string,
   joursCaisse: CashLine[],
   credits: BankLine[],
-  { maxDays = 5, maxFeeRate = 0.03, today = new Date().toISOString().slice(0, 10) } = {},
+  {
+    maxDays = 5,
+    maxFeeRate = 0.03,
+    today = new Date().toISOString().slice(0, 10),
+    /** Toutes les lignes (débits compris) pour lire les remises et frais par leur libellé. */
+    lignes = credits,
+  }: { maxDays?: number; maxFeeRate?: number; today?: string; lignes?: BankLine[] } = {},
 ): ComparaisonCB {
   const caisse = joursCaisse.find((c) => c.date === jour)?.amount ?? 0;
+  // 1) Libellé daté : toutes les remises du jour (une par contrat TPE) additionnées, montant brut.
+  if (caisse > 0) {
+    for (const d of [jour, addDays(jour, 1)]) {
+      const { remises, frais } = remisesDuJour(d, lignes);
+      if (!remises.length) continue;
+      const montant = remises.reduce((s, b) => s + b.amount, 0);
+      const ecart = montant - caisse;
+      const date = remises.map((b) => b.date).sort()[0];
+      return {
+        statut: Math.abs(ecart) <= 1 ? "ok" : "ecart",
+        caisse,
+        banque: { date, montant, libelle: remises.map((b) => b.libelle).join(" + "), jours: daysBetween(jour, date) },
+        ecart,
+        remises,
+        frais,
+        candidats: [],
+      };
+    }
+  }
   const candidats = credits
     .filter((b) => {
       const d = daysBetween(jour, b.date);
