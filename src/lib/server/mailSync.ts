@@ -1,6 +1,6 @@
 import "server-only";
 import { FieldValue } from "firebase-admin/firestore";
-import { inboxDocId, type InboxDoc, type InboxFacture, type InboxItem, type InboxSource, type InboxUber } from "@/lib/ingest";
+import { inboxDocId, versementDuMail, type InboxDoc, type InboxFacture, type InboxItem, type InboxSource, type InboxUber } from "@/lib/ingest";
 import {
   bodyText,
   classify,
@@ -42,6 +42,7 @@ export interface SyncResult {
   erreurs: number;
   incomplet: boolean; // vrai si le temps imparti a été atteint : la suite au prochain passage
   releves?: number; // relevés fournisseurs enregistrés
+  uberAuto?: number; // récaps Uber enregistrés directement comme versements
   lectures?: number; // PDF lus par Claude
   coutUsd?: number;
   limite?: "max" | "budget" | null; // lecture arrêtée par une limite des Réglages
@@ -159,6 +160,9 @@ async function itemsFor(token: string, msg: GmailMessage, kind: "facture" | "ube
         ...(t.revenusTotaux !== undefined ? { brut: t.revenusTotaux } : {}),
         ...(t.fraisUber !== undefined ? { frais: Math.abs(t.fraisUber) } : {}),
         ...(t.periode ? { reference: `Semaine du ${t.periode}`.slice(0, 60) } : {}),
+        ...(t.debut && t.fin ? { debut: t.debut, fin: t.fin } : {}),
+        ...(t.titresRestaurant !== undefined ? { titres: t.titresRestaurant } : {}),
+        ...(t.versementNet !== undefined ? { versementNet: t.versementNet } : {}),
       };
       return [{ ...item, ...(item.date ? {} : { incomplet: true }) }];
     }
@@ -315,10 +319,23 @@ export async function syncMail(
             result.doublons++;
             continue;
           }
-          const doc: InboxDoc = { item: { ...item, source: { ...item.source, boite: rid } } as InboxItem, statut: "a_verifier", receivedAt: now };
+          // Récap Uber complet et cohérent : enregistré directement comme versement (pointage sans clic).
+          const auto = item.kind === "uber" ? versementDuMail(item) : null;
+          const doc: InboxDoc = {
+            item: { ...item, source: { ...item.source, boite: rid } } as InboxItem,
+            statut: auto ? "valide" : "a_verifier",
+            receivedAt: now,
+            ...(auto ? { traiteLe: now, auto: true } : {}),
+          };
           try {
             await target.collection("inbox").doc(inboxDocId(id, n)).create(doc);
-            result.nouveaux++;
+            if (auto) {
+              // Ne remplace pas un versement déjà saisi ou corrigé pour la même semaine.
+              await target.collection("uberPayouts").doc(auto.id).create({ ...auto.payout, createdAt: now }).catch((e) => {
+                if ((e as { code?: number }).code !== 6) throw e;
+              });
+              result.uberAuto = (result.uberAuto ?? 0) + 1;
+            } else result.nouveaux++;
           } catch (e) {
             if ((e as { code?: number }).code !== 6) throw e; // 6 = déjà présent
           }

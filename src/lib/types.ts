@@ -121,12 +121,16 @@ export interface BankTransaction {
   createdAt: number;
 }
 
-/** uberPayouts/{id} : versements Uber Eats importés depuis le Manager Uber Eats. */
+/** uberPayouts/{id} : versements Uber Eats (import du Manager, fiche « À vérifier », ou récap hebdo du mail). */
 export interface UberPayout {
   date: string; // AAAA-MM-JJ du versement
   montant: number; // centimes nets versés
   brut?: number; // ventes TTC de la période, si fournies
   frais?: number; // commission / frais Uber, si fournis
+  titres?: number; // titres-restaurant versés à part
+  debut?: string; // semaine couverte (récap du mail)
+  fin?: string;
+  source?: "mail" | "import" | "manuel";
   reference?: string;
   createdAt: number;
 }
