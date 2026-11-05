@@ -45,6 +45,7 @@ export interface EtatUber {
   configure: boolean;
   avecMotDePasse?: boolean;
   email: string;
+  telephone?: string;
   boutique: string;
   urlProblemes: string;
   modeAuto: boolean;
@@ -165,7 +166,7 @@ export function UberEatsIdentifiants() {
   const { rid, current } = useRestaurant();
   const { user } = useAuth();
   const { etat, recharger } = useEtatUber();
-  const [f, setF] = useState({ email: "", motDePasse: "", boutique: "", urlProblemes: "", modeAuto: false });
+  const [f, setF] = useState({ email: "", motDePasse: "", telephone: "", boutique: "", urlProblemes: "", modeAuto: false });
   const [charge, setCharge] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -173,7 +174,7 @@ export function UberEatsIdentifiants() {
 
   if (etat && !charge) {
     setCharge(true);
-    setF({ email: etat.email, motDePasse: "", boutique: etat.boutique, urlProblemes: etat.urlProblemes, modeAuto: etat.modeAuto });
+    setF({ email: etat.email, motDePasse: "", telephone: etat.telephone ?? "", boutique: etat.boutique, urlProblemes: etat.urlProblemes, modeAuto: etat.modeAuto });
   }
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((p) => ({ ...p, [k]: v }));
 
@@ -214,7 +215,7 @@ export function UberEatsIdentifiants() {
     setBusy(true);
     try {
       await apiUber(user, `/api/uber-eats/identifiants?r=${rid}`, { method: "DELETE" });
-      setF({ email: "", motDePasse: "", boutique: "", urlProblemes: "", modeAuto: false });
+      setF({ email: "", motDePasse: "", telephone: "", boutique: "", urlProblemes: "", modeAuto: false });
       recharger();
     } catch (e) {
       setError((e as Error).message);
@@ -235,6 +236,9 @@ export function UberEatsIdentifiants() {
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="E-mail du compte Uber Eats">
           <Input autoComplete="off" inputMode="email" value={f.email} onChange={(e) => set("email", e.target.value)} />
+        </Field>
+        <Field label="Téléphone du compte Uber" hint="Uber le demande après l'e-mail, puis envoie le code par SMS : le robot le tape tout seul.">
+          <Input type="tel" autoComplete="off" inputMode="tel" value={f.telephone} onChange={(e) => set("telephone", e.target.value)} placeholder="06 12 34 56 78" />
         </Field>
         <Field label="Mot de passe (facultatif)" hint="Laisse vide si Uber se connecte par code reçu par mail ou SMS.">
           <Input type="password" autoComplete="new-password" value={f.motDePasse} onChange={(e) => set("motDePasse", e.target.value)} />
