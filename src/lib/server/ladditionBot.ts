@@ -195,6 +195,7 @@ export interface Extraction {
 export type Page = import("puppeteer-core").Page;
 type Frame = import("puppeteer-core").Frame;
 
+const MOIS_COURTS = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"];
 const MOIS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 
 /** Retire les valeurs des paramètres sensibles d'une URL (jetons, sessions). */
@@ -385,7 +386,8 @@ export async function cliquerTexte(page: Page, source: string, contenuDabord = f
 export async function attendreContenu(page: Page, ms = 8_000) {
   const fin = Date.now() + ms;
   while (Date.now() < fin) {
-    if (/\d{2}\/\d{2}\/\d{2,4}|\d,\d{2}\s*€/.test(await texteDesCadres(page))) return;
+    // Dates « 05/10/2026 » ou « 05 oct. 2026 », montants « 12,34 € » ou « 207001.90 ».
+    if (/\d{2}\/\d{2}\/\d{2,4}|\d,\d{2}\s*€|\d\.\d{2}\b|\d{1,2}\s+[a-zéû]{3,9}\.?\s+\d{4}/i.test(await texteDesCadres(page))) return;
     await pause(500);
   }
 }
@@ -533,7 +535,13 @@ export function moisAffiche(texte: string, mois: string, strict = false): boolea
   const { debut, fin } = bornesMois(mois);
   const fr = (iso: string) => iso.split("-").reverse().join("/");
   const court = (iso: string) => fr(iso).slice(0, 6) + iso.slice(2, 4);
-  const present = (iso: string) => texte.includes(iso) || texte.includes(fr(iso)) || new RegExp(`${court(iso)}\\b`).test(texte);
+  // « 05 oct. 2026 », « 1er octobre 2026 » (sélecteur de dates de reporting-pos).
+  const enLettres = (iso: string) => {
+    const j = Number(iso.slice(8));
+    const noms = [MOIS_FR[Number(m) - 1], MOIS_COURTS[Number(m) - 1]].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    return new RegExp(`(?:^|[^\\d])(?:0?${j}${j === 1 ? "|1er" : ""})\\s+(?:${noms})\\.?\\s+${y}`, "i").test(texte);
+  };
+  const present = (iso: string) => texte.includes(iso) || texte.includes(fr(iso)) || new RegExp(`${court(iso)}\\b`).test(texte) || enLettres(iso);
   if (strict) return present(debut) && present(fin);
   const nom = MOIS_FR[Number(m) - 1];
   return (
@@ -595,6 +603,33 @@ async function choisirMois(page: Page, mois: string, strict = false): Promise<bo
     if (moisAffiche(await texte(), mois, strict)) return true;
   }
   return false;
+}
+
+/**
+ * Période réellement couverte par un export téléchargé.
+ * - Nom du fichier daté : il fait foi, sauf si la période a été imposée aux demandes de la page : le nom peut
+ *   alors garder la plage affichée par défaut alors que les données sont celles du mois. On retient le mois
+ *   si aucun service n'en sort.
+ * - Sans date dans le nom : le mois confirmé à l'écran ou imposé, à condition qu'aucun service ne sorte du mois
+ *   (sinon la période imposée n'a pas été appliquée à l'export).
+ */
+export function verifierPeriodeExport(
+  services: { jour: string }[],
+  mois: string,
+  periodeNom: { debut: string; fin: string } | null,
+  moisChoisi: boolean,
+  periodeForcee: boolean,
+): { periode: { debut: string; fin: string } | null } | { note: string } {
+  const horsMois = services.filter((s) => !s.jour.startsWith(mois)).length;
+  const { debut, fin } = bornesMois(mois);
+  if (periodeNom) {
+    const couvre = periodeNom.debut <= debut && periodeNom.fin >= fin;
+    if (!couvre && periodeForcee && services.length > 0 && horsMois === 0) return { periode: bornesMois(mois) };
+    return { periode: periodeNom };
+  }
+  if (!moisChoisi) return { periode: null };
+  if (horsMois > 0) return { note: `l'export contient ${horsMois} service(s) hors de ${mois} : la période du mois n'a pas été appliquée` };
+  return { periode: bornesMois(mois) };
 }
 
 /**
@@ -663,8 +698,9 @@ async function parExportBrut(page: Page, mois: string): Promise<{ chiffres: Chif
     if (!fichier) return { note: "aucun fichier Excel reçu après l'export" };
 
     const exp = lireExportServices(await lignesXlsx(fichier.data));
-    // Période : celle du nom du fichier, sinon celle affichée sur la page si le mois a bien été sélectionné.
-    const periode = periodeDuNom(fichier.nom) ?? (moisChoisi ? bornesMois(mois) : null);
+    const v = verifierPeriodeExport(exp.services, mois, periodeDuNom(fichier.nom), moisChoisi, suivi(page).periodeForcee > 0);
+    if ("note" in v) return { note: v.note, services: exp.services };
+    const periode = v.periode;
     const r = chiffresDuMois(exp, mois, periode);
     const pb = problemeExport(r, mois, periode) ?? (r.complet === null ? `période du fichier « ${fichier.nom} » inconnue` : null);
     return pb ? { note: pb, services: exp.services } : { chiffres: r.chiffres, services: exp.services };
