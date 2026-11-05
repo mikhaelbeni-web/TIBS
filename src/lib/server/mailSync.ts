@@ -115,7 +115,7 @@ export async function enregistrerReleve(rid: RestaurantId, nom: string, x: Extra
 }
 
 /** Ajoute la dépense de la vérification au compteur du mois (settings/mail.consommation.AAAA-MM). */
-async function enregistrerConsommation(statusRef: FirebaseFirestore.DocumentReference, l: Lecteur) {
+export async function enregistrerConsommation(statusRef: FirebaseFirestore.DocumentReference, l: Lecteur) {
   if (!l.lectures) return;
   const m = moisCle();
   await statusRef.set(
@@ -134,7 +134,7 @@ async function enregistrerConsommation(statusRef: FirebaseFirestore.DocumentRefe
 }
 
 /** Compteur de lecture pour un restaurant, d'après ses réglages et sa dépense du mois. */
-function lecteurPour(status: FirebaseFirestore.DocumentData) {
+export function lecteurPour(status: FirebaseFirestore.DocumentData) {
   const reglages = parseReglages(status.reglages);
   const depense = parseConsommation(status.consommation?.[moisCle()]).coutUsd;
   return new Lecteur(reglages, depense);

@@ -86,6 +86,21 @@ export interface CashEntry {
   ttc10?: number;
   ttc20?: number;
   note?: string;
+  /** Lu sur le ticket Z : montant Uber, nombre de commandes Uber, total imprimé, détail des paiements. */
+  uber?: number;
+  uberCommandes?: number;
+  total?: number;
+  paiements?: { libelle: string; montant: number; categorie: string; nombre?: number }[];
+  source?: "manuel" | "import" | "ticketZ";
+  ticketZ?: { dateTicket: string; heureCloture?: string; luLe: number };
+  createdAt: number;
+}
+
+/** uberJours/{AAAA-MM-JJ} : ventes Uber Eats d'une journée (export des commandes du Manager). */
+export interface UberJourDoc {
+  date: string;
+  commandes: number;
+  ventes: number; // centimes TTC
   createdAt: number;
 }
 

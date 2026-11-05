@@ -3,13 +3,14 @@
 import { deleteDoc, doc, setDoc, writeBatch } from "firebase/firestore";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
-import { bankDocId, isCashDeposit, isUber, rowToUber, rowsToCash } from "@/lib/cashImport";
+import { JourAJour } from "@/components/JourAJour";
+import { bankDocId, isCashDeposit, isUber, rowToUber, rowsToCash, rowsToUberJours } from "@/lib/cashImport";
 import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import { readSpreadsheet, rowToBank } from "@/lib/importer";
 import { formatEuros, toCents } from "@/lib/money";
 import { reconcile, reconcileDeposits, type BankLine, type CashLine } from "@/lib/reconcile";
-import type { BankTransaction, CashEntry, UberPayout, WithId } from "@/lib/types";
+import type { BankTransaction, CashEntry, UberJourDoc, UberPayout, WithId } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 
 const fr = (iso: string) => iso.split("-").reverse().join("/");
@@ -28,8 +29,9 @@ export default function RapprochementPage() {
   const cash = useCollection<CashEntry>("cashEntries", "date");
   const bank = useCollection<BankTransaction>("bankTransactions", "date");
   const uber = useCollection<UberPayout>("uberPayouts", "date");
+  const uberJours = useCollection<UberJourDoc>("uberJours", "date");
   const [mois, setMois] = useState(thisMonth());
-  const [tab, setTab] = useState<"cb" | "especes" | "uber" | "banque">("cb");
+  const [tab, setTab] = useState<"jour" | "cb" | "especes" | "uber" | "banque">("jour");
   const [maxFee, setMaxFee] = useState("3");
   const [maxDays, setMaxDays] = useState("5");
   const [adding, setAdding] = useState(false);
@@ -38,6 +40,7 @@ export default function RapprochementPage() {
   const cashFile = useRef<HTMLInputElement>(null);
   const bankFile = useRef<HTMLInputElement>(null);
   const uberFile = useRef<HTMLInputElement>(null);
+  const uberJoursFile = useRef<HTMLInputElement>(null);
 
   const { start, end, endPlus } = monthBounds(mois, 14);
   const days = useMemo(() => cash.items.filter((c) => c.date >= start && c.date <= end), [cash.items, start, end]);
@@ -124,6 +127,23 @@ export default function RapprochementPage() {
     }
   }
 
+  async function importUberJours(f?: File) {
+    if (!f) return;
+    setOpError(null);
+    try {
+      const jours = rowsToUberJours(await readSpreadsheet(f));
+      if (!jours.length) throw new Error("Aucune commande reconnue. Colonnes attendues : Date de la commande (avec l'heure si possible), Ventes TTC (et Statut).");
+      const batch = writeBatch(db());
+      jours.forEach((j) => batch.set(doc(db(), "restaurants", rid, "uberJours", j.date), { ...j, createdAt: Date.now() }));
+      await batch.commit();
+      setInfo(`Commandes Uber Eats de ${jours.length} jour(s) importées.`);
+    } catch (e) {
+      setOpError((e as Error).message);
+    } finally {
+      if (uberJoursFile.current) uberJoursFile.current.value = "";
+    }
+  }
+
   async function importBank(f?: File) {
     if (!f) return;
     setOpError(null);
@@ -161,13 +181,15 @@ export default function RapprochementPage() {
           <>
             <Button variant="secondary" onClick={() => cashFile.current?.click()}>Importer caisse</Button>
             <Button variant="secondary" onClick={() => bankFile.current?.click()}>Importer relevé</Button>
-            <Button variant="secondary" onClick={() => uberFile.current?.click()}>Importer Uber</Button>
+            <Button variant="secondary" onClick={() => uberFile.current?.click()}>Importer versements Uber</Button>
+            <Button variant="secondary" onClick={() => uberJoursFile.current?.click()}>Importer commandes Uber</Button>
             <Button onClick={() => setAdding(true)}>+ Journée</Button>
           </>
         }
       />
       <input ref={cashFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importCash(e.target.files?.[0])} />
       <input ref={bankFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importBank(e.target.files?.[0])} />
+      <input ref={uberJoursFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importUberJours(e.target.files?.[0])} />
       <input ref={uberFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importUber(e.target.files?.[0])} />
 
       <div className="mb-4 grid grid-cols-2 items-end gap-2 sm:max-w-xl sm:grid-cols-3">
@@ -178,7 +200,7 @@ export default function RapprochementPage() {
         <Field label="Délai max (jours)"><Input inputMode="numeric" value={maxDays} onChange={(e) => setMaxDays(e.target.value)} /></Field>
       </div>
 
-      <ErrorBox message={cash.error || bank.error || uber.error || opError} />
+      <ErrorBox message={cash.error || bank.error || uber.error || uberJours.error || opError} />
       {info && <p className="mb-3 rounded-control bg-success-soft p-3 text-sm text-success">{info}</p>}
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -198,15 +220,25 @@ export default function RapprochementPage() {
         </Card>
       </div>
 
-      <div className="mb-4 grid grid-cols-4 gap-2 sm:flex">
+      <div className="mb-4 grid grid-cols-3 gap-2 sm:flex">
+        <Button variant={tab === "jour" ? "primary" : "secondary"} onClick={() => setTab("jour")}>Jour à jour</Button>
         <Button variant={tab === "cb" ? "primary" : "secondary"} onClick={() => setTab("cb")}>CB</Button>
         <Button variant={tab === "especes" ? "primary" : "secondary"} onClick={() => setTab("especes")}>Espèces</Button>
         <Button variant={tab === "uber" ? "primary" : "secondary"} onClick={() => setTab("uber")}>Uber</Button>
         <Button variant={tab === "banque" ? "primary" : "secondary"} onClick={() => setTab("banque")}>Relevé</Button>
       </div>
 
-      {cash.loading || bank.loading || uber.loading ? (
+      {cash.loading || bank.loading || uber.loading || uberJours.loading ? (
         <p className="text-muted">Chargement…</p>
+      ) : tab === "jour" ? (
+        <JourAJour
+          cash={cash.items}
+          bank={bank.items}
+          uber={uber.items}
+          uberJours={uberJours.items}
+          maxFee={Number(maxFee.replace(",", ".")) || 0}
+          maxDays={Number(maxDays) || 5}
+        />
       ) : tab === "cb" ? (
         <div className="space-y-4">
           {days.length === 0 && <Empty>Aucune journée de caisse ce mois-ci. Importez votre export ou ajoutez une journée.</Empty>}

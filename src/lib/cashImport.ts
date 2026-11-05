@@ -87,3 +87,44 @@ export function rowToUber(row: Row): UberDraft | null {
     ...(ref !== undefined ? { reference: String(ref).trim() } : {}),
   };
 }
+
+export interface UberJourDraft {
+  date: string;
+  commandes: number;
+  ventes: number; // centimes TTC
+}
+
+const AVANT_BASCULE = 6; // une commande à 00:30 compte dans la journée de la veille, comme le Z
+
+function heureDe(v: unknown): number | null {
+  if (v instanceof Date && !Number.isNaN(v.getTime())) return v.getHours();
+  if (typeof v !== "string") return null;
+  const m = v.match(/(?:^|\D)(\d{1,2})[:h](\d{2})/);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Export des commandes du Manager Uber Eats → ventes et nombre de commandes par jour.
+ * Accepte une ligne par commande (on compte les lignes) ou une ligne par jour avec une colonne
+ * « Commandes ». Les commandes annulées / remboursées à 100 % sont ignorées.
+ */
+export function rowsToUberJours(rows: Row[]): UberJourDraft[] {
+  const parJour = new Map<string, UberJourDraft>();
+  for (const row of rows) {
+    const brut = pick(row, ["date de la commande", "date commande", "order date", "date et heure", "date", "jour"]);
+    let date = toIsoDate(typeof brut === "string" ? brut.trim().split(/[ T]/)[0] : brut);
+    if (!date) continue;
+    const statut = String(pick(row, ["statut", "statut de la commande", "order status", "status"]) ?? "").toLowerCase();
+    if (/annul|cancel|refus|echou|échou|failed/.test(statut)) continue;
+    const h = heureDe(pick(row, ["heure", "heure de la commande", "order time", "heure de commande"]) ?? brut);
+    if (h !== null && h < AVANT_BASCULE) date = new Date(Date.parse(`${date}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+    const ventes = toCents(pick(row, ["ventes ttc", "ventes", "total des ventes", "montant ttc", "total ttc", "sales incl vat", "sales", "gross sales", "total", "montant"]));
+    if (ventes === null) continue;
+    const n = toCents(pick(row, ["commandes", "nombre de commandes", "nb commandes", "orders", "order count"]));
+    const d = parJour.get(date) ?? { date, commandes: 0, ventes: 0 };
+    d.commandes += n === null ? 1 : Math.round(n / 100);
+    d.ventes += ventes;
+    parJour.set(date, d);
+  }
+  return [...parJour.values()].sort((a, b) => a.date.localeCompare(b.date));
+}

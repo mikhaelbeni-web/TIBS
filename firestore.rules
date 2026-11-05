@@ -76,6 +76,15 @@ service cloud.firestore {
           && request.resource.data.date is string;
       }
 
+      // Ventes Uber Eats par jour (export du Manager) : nombre de commandes et montant, comparés au Z.
+      match /uberJours/{date} {
+        allow read, delete: if gerantDe(rid);
+        allow create, update: if gerantDe(rid)
+          && request.resource.data.date == date
+          && request.resource.data.commandes is int
+          && request.resource.data.ventes is int;
+      }
+
       match /uberPayouts/{id} {
         allow read, delete: if gerantDe(rid);
         allow create, update: if gerantDe(rid)
