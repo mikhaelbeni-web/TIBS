@@ -1,7 +1,7 @@
 import "server-only";
 import { createHmac, createPrivateKey, type KeyObject } from "node:crypto";
 import { SignJWT } from "jose";
-import { normaliserPem, type EbTransaction } from "@/lib/banque";
+import { appelLectureSeule, normaliserPem, type EbTransaction } from "@/lib/banque";
 import { safeEqual } from "@/lib/ingest";
 import { isRestaurantId, type RestaurantId } from "@/lib/restaurants";
 
@@ -49,7 +49,10 @@ async function jeton(): Promise<string> {
 }
 
 async function appel<T>(chemin: string, init: RequestInit = {}): Promise<T> {
+  // Verrou lecture seule : aucun appel de paiement ou de virement ne peut partir d'ici.
+  if (!appelLectureSeule(init.method ?? "GET", chemin)) throw new Error(`Appel bancaire refusé (lecture seule) : ${init.method ?? "GET"} ${chemin.split("?")[0]}`);
   const res = await fetch(`${API}${chemin}`, {
+    redirect: "error",
     ...init,
     headers: { authorization: `Bearer ${await jeton()}`, "content-type": "application/json", accept: "application/json", ...init.headers },
     cache: "no-store",

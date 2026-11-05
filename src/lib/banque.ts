@@ -175,3 +175,22 @@ export function normaliserPem(brut: string): { pem: string } | { erreur: string 
   const lignes = corps.match(/.{1,64}/g) ?? [];
   return { pem: `-----BEGIN ${type}-----\n${lignes.join("\n")}\n-----END ${type}-----\n` };
 }
+
+/**
+ * RÈGLE DE SÉCURITÉ : l'app ne fait que LIRE les comptes. Seuls ces appels Enable Banking sont autorisés :
+ * liste des banques, ouverture / fermeture d'un accès en lecture, lecture des opérations.
+ * Tout le reste (paiements, virements, bénéficiaires…) est refusé avant même de partir vers l'API.
+ */
+const APPELS_LECTURE: { methode: string; chemin: RegExp }[] = [
+  { methode: "GET", chemin: /^\/aspsps(\?[^/]*)?$/ },
+  { methode: "POST", chemin: /^\/auth$/ },
+  { methode: "POST", chemin: /^\/sessions$/ },
+  { methode: "DELETE", chemin: /^\/sessions\/[A-Za-z0-9%._~-]+$/ },
+  { methode: "GET", chemin: /^\/accounts\/[A-Za-z0-9%._~-]+\/transactions(\?[^/]*)?$/ },
+];
+
+export function appelLectureSeule(methode: string, chemin: string): boolean {
+  const m = methode.toUpperCase();
+  if (/payment|transfer|virement|beneficiar/i.test(chemin)) return false;
+  return APPELS_LECTURE.some((a) => a.methode === m && a.chemin.test(chemin));
+}
