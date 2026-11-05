@@ -314,3 +314,15 @@ export function comparerUberJour(
   const ok = Math.abs(ecartMontant) <= tolerance && (ecartCommandes === undefined || ecartCommandes === 0);
   return { statut: ok ? "ok" : "ecart", caisse, uber, ecartCommandes, ecartMontant };
 }
+
+/** Seuls les liens de ticket Z de L'Addition (colonne URL de l'export « Détails par service ») sont suivis. */
+export function urlZAutorisee(u: unknown): URL | null {
+  if (typeof u !== "string" || u.length > 2000) return null;
+  try {
+    const url = new URL(u);
+    if (url.protocol === "http:") url.protocol = "https:";
+    return url.protocol === "https:" && url.hostname === "data.laddition.com" && !url.username && !url.password && !url.port ? url : null;
+  } catch {
+    return null;
+  }
+}
