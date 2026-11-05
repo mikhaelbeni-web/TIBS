@@ -1,0 +1,81 @@
+import { describe, expect, it } from "vitest";
+import { rowsToUberJours } from "../cashImport";
+import { categorie, comparerCB, comparerUber, comparerUberJour, controleTotal, jourDuTicket, semaineUber, totaux } from "../ticketZ";
+
+describe("ticket Z", () => {
+  it("un Z clôturé après minuit appartient à la veille", () => {
+    expect(jourDuTicket("2026-11-05", "00:53")).toBe("2026-11-04");
+    expect(jourDuTicket("2026-11-01", "01:10")).toBe("2026-10-31");
+    expect(jourDuTicket("2026-11-04", "23:40")).toBe("2026-11-04");
+    expect(jourDuTicket("2026-11-04")).toBe("2026-11-04");
+  });
+
+  it("range les moyens de paiement", () => {
+    expect(categorie("Uber Eats")).toBe("uber");
+    expect(categorie("CB")).toBe("cb");
+    expect(categorie("Carte bancaire sans contact")).toBe("cb");
+    expect(categorie("AMEX")).toBe("cb");
+    expect(categorie("Espèces")).toBe("especes");
+    expect(categorie("Swile")).toBe("ticketsResto");
+    expect(categorie("Ticket restaurant")).toBe("ticketsResto");
+    expect(categorie("Chèque")).toBe("autres");
+  });
+
+  it("totaux, commandes Uber et contrôle du total", () => {
+    const paiements = [
+      { libelle: "CB", montant: 150000, categorie: "cb" as const },
+      { libelle: "Uber Eats", montant: 90100, categorie: "uber" as const, nombre: 25 },
+      { libelle: "Espèces", montant: 20000, categorie: "especes" as const },
+    ];
+    const t = totaux(paiements);
+    expect(t).toMatchObject({ cb: 150000, uber: 90100, uberCommandes: 25, especes: 20000, somme: 260100 });
+    expect(controleTotal({ dateTicket: "2026-11-05", paiements, total: 260100 }).statut).toBe("ok");
+    expect(controleTotal({ dateTicket: "2026-11-05", paiements, total: 270100 })).toMatchObject({ statut: "ecart", ecart: -10000 });
+  });
+
+  it("CB : remise J+1 avec commission", () => {
+    const r = comparerCB(
+      "2026-11-04",
+      [{ id: "a", date: "2026-11-04", amount: 150000 }],
+      [{ id: "b", date: "2026-11-05", amount: 148500, libelle: "REMISE CB" }],
+      { today: "2026-11-10" },
+    );
+    expect(r).toMatchObject({ statut: "ok", ecart: -1500, banque: { jours: 1 } });
+  });
+
+  it("CB : rien en banque → attente les premiers jours, écart ensuite", () => {
+    const cash = [{ id: "a", date: "2026-11-04", amount: 150000 }];
+    expect(comparerCB("2026-11-04", cash, [], { today: "2026-11-05" }).statut).toBe("attente");
+    expect(comparerCB("2026-11-04", cash, [], { today: "2026-11-20" }).statut).toBe("ecart");
+  });
+
+  it("Uber du jour : même nombre de commandes et même montant", () => {
+    expect(comparerUberJour({ commandes: 25, montant: 90100 }, { date: "d", commandes: 25, ventes: 90100 }).statut).toBe("ok");
+    expect(comparerUberJour({ commandes: 25, montant: 90100 }, { date: "d", commandes: 24, ventes: 86000 })).toMatchObject({
+      statut: "ecart",
+      ecartCommandes: -1,
+      ecartMontant: -4100,
+    });
+    expect(comparerUberJour({ commandes: 25, montant: 90100 }, undefined).statut).toBe("attente");
+  });
+
+  it("Uber de la semaine contre le versement du lundi", () => {
+    expect(semaineUber("2026-11-04")).toEqual({ debut: "2026-11-02", fin: "2026-11-08" });
+    const jours = Array.from({ length: 7 }, (_, i) => ({ id: `${i}`, date: `2026-11-0${i + 2}`, amount: 10000 }));
+    const r = comparerUber("2026-11-04", jours, [{ id: "v", date: "2026-11-09", montant: 52000, brut: 70000 }], { today: "2026-11-10" });
+    expect(r).toMatchObject({ statut: "ok", caisseSemaine: 70000, joursSaisis: 7, ecart: 0 });
+  });
+
+  it("commandes Uber par jour depuis l'export du Manager", () => {
+    const jours = rowsToUberJours([
+      { datedelacommande: "04/11/2026 20:15", ventesttc: "36,04", statut: "Livrée" },
+      { datedelacommande: "05/11/2026 00:20", ventesttc: "10", statut: "Livrée" },
+      { datedelacommande: "04/11/2026 21:00", ventesttc: "12", statut: "Annulée" },
+      { datedelacommande: "05/11/2026 12:00", ventesttc: "20", statut: "Livrée" },
+    ]);
+    expect(jours).toEqual([
+      { date: "2026-11-04", commandes: 2, ventes: 4604 },
+      { date: "2026-11-05", commandes: 1, ventes: 2000 },
+    ]);
+  });
+});

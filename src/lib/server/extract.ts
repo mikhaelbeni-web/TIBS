@@ -247,3 +247,60 @@ export async function extractUber(
 }
 
 export const estReleve = (r: ExtractedFacture | ExtractedReleve): r is ExtractedReleve => (r as ExtractedReleve).kind === "releve";
+
+const TicketZSchema = z.object({
+  est_ticket_z: z.boolean().describe("true si le document est un ticket Z / rapport de clôture de caisse"),
+  date_ticket: z.string().describe("date imprimée en haut du ticket, AAAA-MM-JJ"),
+  heure_cloture: z.string().describe("heure de fermeture / clôture des caisses HH:MM, chaîne vide si absente"),
+  paiements: z
+    .array(
+      z.object({
+        libelle: z.string().describe("moyen de paiement tel qu'écrit (CB, Espèces, Uber Eats, Ticket restaurant, Swile…)"),
+        nombre: z.number().nullable().describe("nombre d'opérations ou de commandes imprimé à côté (ex. « x25 » → 25), null si absent"),
+        montant: z.number().describe("montant en euros"),
+      }),
+    )
+    .describe("chaque ligne de la section des moyens de paiement / règlements, en bas du ticket, sans la ligne de total"),
+  total: z.number().nullable().describe("total des règlements / total encaissé imprimé, null si absent"),
+  ttc_5_5: z.number().nullable().describe("ventes TTC au taux de 5,5 %, null si absent"),
+  ttc_10: z.number().nullable().describe("ventes TTC au taux de 10 %, null si absent"),
+  ttc_20: z.number().nullable().describe("ventes TTC au taux de 20 %, null si absent"),
+});
+
+export interface ExtractedTicketZ {
+  dateTicket?: string;
+  heureCloture?: string;
+  paiements: { libelle: string; montant: number; nombre?: number }[];
+  total?: number;
+  ttc55?: number;
+  ttc10?: number;
+  ttc20?: number;
+}
+
+/** Ticket Z de L'Addition (PDF ou photo). null si le document n'en est pas un. */
+export async function extractTicketZ(
+  fichier: { base64: string; mediaType: string },
+  lecteur: Lecteur,
+): Promise<ExtractedTicketZ | null> {
+  const doc: Anthropic.Beta.BetaContentBlockParam =
+    fichier.mediaType === "application/pdf"
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: fichier.base64 } }
+      : { type: "image", source: { type: "base64", media_type: fichier.mediaType as "image/jpeg" | "image/png" | "image/webp", data: fichier.base64 } };
+  const r = await ask(lecteur, TicketZSchema, [
+    doc,
+    { type: "text", text: "Ticket Z de la caisse L'Addition. Relève la date et l'heure de clôture en haut, puis chaque moyen de paiement en bas (avec le nombre « xN » s'il est imprimé) et le total." },
+  ]);
+  if (!r || !r.est_ticket_z) return null;
+  return clean({
+    dateTicket: iso(r.date_ticket),
+    heureCloture: r.heure_cloture.trim().slice(0, 5),
+    paiements: r.paiements
+      .map((p) => ({ libelle: p.libelle.trim().slice(0, 80), montant: cents(p.montant) ?? 0, ...(p.nombre !== null && p.nombre >= 0 ? { nombre: Math.round(p.nombre) } : {}) }))
+      .filter((p) => p.libelle)
+      .slice(0, 40),
+    total: cents(r.total),
+    ttc55: cents(r.ttc_5_5),
+    ttc10: cents(r.ttc_10),
+    ttc20: cents(r.ttc_20),
+  });
+}
