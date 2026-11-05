@@ -193,6 +193,10 @@ export async function synchroniserLAddition(rid: RestaurantId, opts: { mois?: st
       // Seulement les journées du mois relevé (le fichier peut déborder si la période n'a pas pu être imposée).
       const jours = new Map([...journeesDesServices(r.services ?? [])].filter(([j]) => j.startsWith(`${mois}-`)));
       if (!jours.size) bilan.diagnostic = propre(r.diagnostic);
+      else if (![...jours.values()].some((d) => d.liens.length)) {
+        bilan.echecs.push(`${mois} : aucun lien de ticket Z dans l'export L'Addition`);
+        bilan.diagnostic = propre(r.diagnostic);
+      }
       const existants = new Map(
         (await db.collection(`restaurants/${rid}/cashEntries`).where("date", ">=", `${mois}-01`).where("date", "<=", `${mois}-31`).get()).docs.map((d) => [d.id, d.data()]),
       );
