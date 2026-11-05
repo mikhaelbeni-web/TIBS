@@ -9,6 +9,7 @@ import { bankDocId, isCashDeposit, isUber, rowToUber, rowsToCash, rowsToUberJour
 import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import { readSpreadsheet, rowToBank } from "@/lib/importer";
+import { sansDoublonsImport } from "@/lib/banque";
 import { formatEuros, toCents } from "@/lib/money";
 import { reconcile, reconcileDeposits, type BankLine, type CashLine } from "@/lib/reconcile";
 import type { BankTransaction, CashEntry, UberJourDoc, UberPayout, WithId } from "@/lib/types";
@@ -149,8 +150,11 @@ export default function RapprochementPage() {
     if (!f) return;
     setOpError(null);
     try {
-      const rows = (await readSpreadsheet(f)).map(rowToBank).filter((r) => r !== null);
-      if (!rows.length) throw new Error("Aucune opération reconnue. Colonnes attendues : Date, Libellé, Montant (ou Débit / Crédit).");
+      const lues = (await readSpreadsheet(f)).map(rowToBank).filter((r) => r !== null);
+      if (!lues.length) throw new Error("Aucune opération reconnue. Colonnes attendues : Date, Libellé, Montant (ou Débit / Crédit).");
+      // Opérations déjà relevées automatiquement (DSP2) : on ne les réimporte pas depuis le fichier.
+      const rows = sansDoublonsImport(lues, bank.items.filter((b) => b.source === "banque"));
+      const dejaReleves = lues.length - rows.length;
       const importId = `${Date.now()}`;
       const seen = new Map<string, number>();
       // Firestore limite un lot à 500 écritures.
@@ -164,7 +168,9 @@ export default function RapprochementPage() {
         }
         await batch.commit();
       }
-      setInfo(`${rows.length} opération(s) bancaire(s) importée(s). Les doublons d'un précédent import sont ignorés.`);
+      setInfo(
+        `${rows.length} opération(s) bancaire(s) importée(s). Les doublons d'un précédent import sont ignorés.${dejaReleves ? ` ${dejaReleves} déjà présente(s) grâce au relevé automatique.` : ""}`,
+      );
     } catch (e) {
       setOpError((e as Error).message);
     } finally {

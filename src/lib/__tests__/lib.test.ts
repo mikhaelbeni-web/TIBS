@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { reconcile } from "../reconcile";
 import { checkDpae, isValidNir } from "../dpae";
 import { toCents, toIsoDate } from "../money";
-import { rowToBank, rowToEmployee, normalizeHeader } from "../importer";
+import { debutTableau, rowToBank, rowToEmployee, normalizeHeader } from "../importer";
 
 describe("money", () => {
   it("parse les formats français", () => {
@@ -79,6 +79,25 @@ describe("importer", () => {
     });
     expect(rowToBank({ date: "02/10/2026", libelle: "X", debit: "50,00" })?.montant).toBe(-5000);
     expect(rowToBank({ date: "", montant: "1" })).toBeNull();
+  });
+  it("lit l'export Caisse d'Épargne (lignes avant le tableau, libellé simplifié)", async () => {
+    const Papa = (await import("papaparse")).default;
+    const csv = [
+      "Code de la banque : 17515;Code de l'agence : 90000;Date de début de téléchargement : 01/10/2026",
+      "Numéro de compte : 00000000000;Nom du compte : COMPTE COURANT;Devise : EUR",
+      "",
+      "Solde en fin de période;;;1000,00",
+      "Date comptable;Libelle simplifie;Reference;Informations complementaires;Type operation;Debit;Credit;Date operation;Date de valeur;Pointage",
+      "30/10/2026;CB TIB S 301026;0877;CONTRAT 1 REM 2;Remise CB;;+46,50;31/10/2026;02/11/2026;Non",
+      "29/10/2026;PRLV METRO FRANCE S.A.S.-METRO F;2630;03805-/INV/0053.097421;Prelevement SDD;-1625,28;;29/10/2026;29/10/2026;Non",
+    ].join("\r\n");
+    const rows = Papa.parse<Record<string, unknown>>(debutTableau(csv), { header: true, skipEmptyLines: true, transformHeader: normalizeHeader }).data;
+    expect(rows.map(rowToBank)).toEqual([
+      { date: "2026-10-31", libelle: "CB TIB S 301026", montant: 4650, details: "CONTRAT 1 REM 2", type: "Remise CB" },
+      { date: "2026-10-29", libelle: "PRLV METRO FRANCE S.A.S.-METRO F", montant: -162528, details: "03805-/INV/0053.097421", type: "Prelevement SDD" },
+    ]);
+    // Un export sans lignes d'en-tête reste intact.
+    expect(debutTableau("date;libelle;montant\n02/10/2026;X;1")).toBe("date;libelle;montant\n02/10/2026;X;1");
   });
 });
 
@@ -229,6 +248,8 @@ describe("Uber Eats", () => {
   });
   it("rapproche un versement avec le virement UBER, même arrivé la veille", () => {
     expect(isUber("VIR SEPA UBER EATS FRANCE")).toBe(true);
+    // Caisse d'Épargne : Uber verse depuis « Stichting Custodian Uber », libellé tronqué.
+    expect(isUber("VIR SEPA STICHTING CUSTODIAN UB")).toBe(true);
     const r = reconcile(
       [{ id: "p1", date: "2026-10-06", amount: 123450 }],
       [
