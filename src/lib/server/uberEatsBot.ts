@@ -32,7 +32,7 @@ export class UberError extends Error {
 
 export interface ConfigUber {
   email: string;
-  motDePasse: string;
+  motDePasse: string; // vide : connexion par code seulement
   urlProblemes?: string;
   boutique?: string;
   cookies?: string; // JSON des cookies de la dernière session
@@ -178,6 +178,16 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
       if (antiRobot(t)) throw new UberError("Uber demande une vérification anti-robot : connexion automatique impossible pour l'instant.", await diag(page, "connexion", appels), "anti_robot");
 
       const mdp = await visible(page, SEL_MDP);
+      if (mdp && !cfg.motDePasse) {
+        // Pas de mot de passe enregistré : on demande plutôt un code si Uber le propose.
+        if (!(await cliquerTexte(page, "^(plus d.options|more options|autres options|recevoir un code|envoyer (un|le) code|send code|code par (e-?mail|sms))$"))) {
+          throw new UberError("Uber demande un mot de passe pour ce compte : ajoute-le dans Réglages.", await diag(page, "mot de passe", appels), "identifiants");
+        }
+        await pause(1_000);
+        await cliquerTexte(page, "(code|e-?mail|sms)");
+        await calme(page);
+        continue;
+      }
       if (mdp) {
         await mdp.click({ count: 3 });
         await mdp.type(cfg.motDePasse, { delay: 25 });
@@ -192,7 +202,7 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
       const code = demandeCode(t) && (await visible(page, SEL_CODE + ", input[inputmode=numeric]"));
       if (code) {
         // On préfère le mot de passe quand Uber propose « Plus d'options ».
-        if (etape < 3 && (await cliquerTexte(page, "^(plus d.options|more options|autres options)$"))) {
+        if (cfg.motDePasse && etape < 3 && (await cliquerTexte(page, "^(plus d.options|more options|autres options)$"))) {
           await pause(1_000);
           if (await cliquerTexte(page, "^(mot de passe|password)$")) {
             await calme(page);

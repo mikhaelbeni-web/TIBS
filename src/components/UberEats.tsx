@@ -42,6 +42,7 @@ const dateFr = (ms: number) => new Date(ms).toLocaleString("fr-FR", { dateStyle:
 
 export interface EtatUber {
   configure: boolean;
+  avecMotDePasse?: boolean;
   email: string;
   boutique: string;
   urlProblemes: string;
@@ -185,6 +186,21 @@ export function UberEatsIdentifiants() {
     }
   }
 
+  async function effacerMdp() {
+    if (!user) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiUber(user, `/api/uber-eats/identifiants?r=${rid}`, { method: "POST", body: JSON.stringify({ ...f, motDePasse: "", sansMotDePasse: true }) });
+      setInfo("Mot de passe effacé : le robot se connectera par code.");
+      recharger();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function oublier() {
     if (!user || !confirm("Supprimer les identifiants Uber Eats de ce restaurant ?")) return;
     setBusy(true);
@@ -212,7 +228,7 @@ export function UberEatsIdentifiants() {
         <Field label="E-mail du compte Uber Eats">
           <Input autoComplete="off" inputMode="email" value={f.email} onChange={(e) => set("email", e.target.value)} />
         </Field>
-        <Field label="Mot de passe" hint={etat?.configure ? "Laisse vide pour garder l'actuel." : undefined}>
+        <Field label="Mot de passe (facultatif)" hint="Laisse vide si Uber se connecte par code reçu par mail ou SMS.">
           <Input type="password" autoComplete="new-password" value={f.motDePasse} onChange={(e) => set("motDePasse", e.target.value)} />
         </Field>
         <Field label="Boutique (facultatif)" hint="Nom affiché dans Uber, ex. Tib's (K), si le compte voit les deux restaurants.">
@@ -230,7 +246,10 @@ export function UberEatsIdentifiants() {
         </span>
       </label>
       <div className="flex flex-wrap gap-2">
-        <Button onClick={enregistrer} disabled={busy || !f.email || (!f.motDePasse && !etat?.configure)}>Enregistrer</Button>
+        <Button onClick={enregistrer} disabled={busy || !f.email}>Enregistrer</Button>
+        {etat?.avecMotDePasse && (
+          <Button variant="ghost" onClick={effacerMdp} disabled={busy}>Effacer le mot de passe enregistré</Button>
+        )}
         {etat?.configure && (
           <Button variant="ghost" onClick={oublier} disabled={busy}>Supprimer</Button>
         )}
