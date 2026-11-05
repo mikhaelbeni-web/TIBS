@@ -23,6 +23,12 @@ export interface Diagnostic {
   appels: string[];
   /** Adresses des cadres (iframes) de la page, le principal d'abord. */
   cadres?: string[];
+  /** Forme des réponses JSON des API de rapports (clés seulement), pour adapter le robot. */
+  structures?: string[];
+  /** Demandes de L'Addition dont le robot a remplacé la période par le mois voulu. */
+  periodeForcee?: number;
+  /** Page « détail des services » quand l'export n'a pas abouti. */
+  export?: { note: string; url: string; cadres: string[]; texte: string };
   /** Contrôles de la connexion, sans aucune valeur saisie. */
   connexion?: ControleConnexion;
 }
@@ -77,6 +83,80 @@ export function resumeCorps(corps: string | undefined): string {
     /token|pass|pwd|secret|auth|login|user|mail|identifiant|code/i.test(k) ? `${k}=…` : `${k}=${(JSON.stringify(v) ?? "").slice(0, 60)}`,
   );
   return `{${parties.join(", ")}}`.slice(0, 300);
+}
+
+const DEBUT_CLE = /open|start|begin|from|debut|min/i;
+const FIN_CLE = /clos|end|until|fin\b|max|(^|_)to$/i;
+
+function reecrireObjet(o: Record<string, unknown>, debut: string, fin: string, prof: number): boolean {
+  let change = false;
+  for (const [k, v] of Object.entries(o)) {
+    if (v && typeof v === "object" && !Array.isArray(v) && prof < 3) {
+      change = reecrireObjet(v as Record<string, unknown>, debut, fin, prof + 1) || change;
+      continue;
+    }
+    if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(v)) continue;
+    const borne = DEBUT_CLE.test(k) ? debut : FIN_CLE.test(k) ? fin : null;
+    if (!borne || v.startsWith(borne)) continue;
+    o[k] = borne + v.slice(10);
+    change = true;
+  }
+  return change;
+}
+
+/**
+ * Remplace les dates d'un corps JSON (opening_date, closing_date, start…, end…) par les bornes voulues
+ * (AAAA-MM-JJ), en gardant l'heure. null si rien à changer.
+ */
+export function reecrirePeriode(corps: string, debut: string, fin: string): string | null {
+  let j: unknown;
+  try {
+    j = JSON.parse(corps);
+  } catch {
+    return null;
+  }
+  if (!j || typeof j !== "object" || Array.isArray(j)) return null;
+  return reecrireObjet(j as Record<string, unknown>, debut, fin, 0) ? JSON.stringify(j) : null;
+}
+
+/** Même chose pour les paramètres datés d'une adresse. null si rien à changer. */
+export function reecrireUrlPeriode(u: string, debut: string, fin: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(u);
+  } catch {
+    return null;
+  }
+  const o = Object.fromEntries(url.searchParams.entries());
+  if (!reecrireObjet(o, debut, fin, 3)) return null;
+  for (const [k, v] of Object.entries(o)) url.searchParams.set(k, String(v));
+  return url.toString();
+}
+
+/** Forme d'une valeur JSON : clés seulement (les liens sont signalés), jamais les valeurs. */
+export function decrireJson(v: unknown, prof = 0): string {
+  if (Array.isArray(v)) return `[${v.length} × ${v.length ? decrireJson(v[0], prof + 1) : "?"}]`;
+  if (v && typeof v === "object") {
+    if (prof >= 4) return "{…}";
+    const cles = Object.entries(v as Record<string, unknown>)
+      .slice(0, 30)
+      .map(([k, x]) => (x && typeof x === "object" ? `${k}:${decrireJson(x, prof + 1)}` : typeof x === "string" && /^https?:\/\//.test(x) ? `${k}(lien)` : k));
+    return `{${cles.join(", ")}}`;
+  }
+  return typeof v;
+}
+
+/** API de rapports de L'Addition (reporting-pos…), hors authentification. */
+export function estApiRapports(u: string): boolean {
+  try {
+    const url = new URL(u);
+    const hote = url.hostname;
+    const laddition = hote.endsWith(".laddition.com") && hote !== "auth.laddition.com";
+    const local = hote === "127.0.0.1" || hote === "localhost";
+    return (laddition || local) && /^\/api\//.test(url.pathname) && !/^\/api\/auth\b/.test(url.pathname) && !/^\/v2\/api\//.test(url.pathname);
+  } catch {
+    return false;
+  }
 }
 
 /** Noms des champs d'un corps JSON ou formulaire, sans les valeurs. */
@@ -199,14 +279,71 @@ export async function texteDesCadres(page: Page, avecChamps = false): Promise<st
   return morceaux.join("\n");
 }
 
+interface Suivi {
+  structures: Map<string, string>;
+  periodeForcee: number;
+  /** Bornes AAAA-MM-JJ imposées aux API de rapports. */
+  periode?: { debut: string; fin: string };
+  export?: Diagnostic["export"];
+}
+const suivis = new WeakMap<Page, Suivi>();
+function suivi(page: Page): Suivi {
+  let x = suivis.get(page);
+  if (!x) suivis.set(page, (x = { structures: new Map(), periodeForcee: 0 }));
+  return x;
+}
+
+/** Les prochaines demandes des API de rapports porteront sur ce mois (compteur remis à zéro). */
+function imposerPeriode(page: Page, mois: string) {
+  const x = suivi(page);
+  x.periode = bornesMois(mois);
+  x.periodeForcee = 0;
+}
+
+/**
+ * Le sélecteur de dates de L'Addition 3.x n'est pas pilotable de façon sûre : le robot laisse la page
+ * faire ses demandes et remplace leur période (opening_date / closing_date…) par le mois voulu.
+ * Note aussi la forme des réponses JSON pour le diagnostic.
+ */
+async function suivreApi(page: Page) {
+  const x = suivi(page);
+  await page.setRequestInterception(true);
+  page.on("request", (req) => {
+    if (req.isInterceptResolutionHandled()) return;
+    const per = x.periode;
+    if (per && estApiRapports(req.url())) {
+      const corps = req.postData();
+      const nouveauCorps = corps ? reecrirePeriode(corps, per.debut, per.fin) : null;
+      const nouvelleUrl = reecrireUrlPeriode(req.url(), per.debut, per.fin);
+      if (nouveauCorps || nouvelleUrl) {
+        x.periodeForcee++;
+        void req.continue({ ...(nouveauCorps ? { postData: nouveauCorps } : {}), ...(nouvelleUrl ? { url: nouvelleUrl } : {}) }).catch(() => {});
+        return;
+      }
+    }
+    void req.continue().catch(() => {});
+  });
+  page.on("response", async (r) => {
+    if (!r.ok() || !estApiRapports(r.url()) || !/json/i.test(r.headers()["content-type"] ?? "")) return;
+    const chemin = new URL(r.url()).pathname;
+    if (x.structures.has(chemin) || x.structures.size >= 10) return;
+    const j: unknown = await r.json().catch(() => undefined);
+    if (j !== undefined) x.structures.set(chemin, `${r.request().method()} ${chemin} → ${decrireJson(j)}`.slice(0, 700));
+  });
+}
+
 export async function diagnostic(page: Page, etape: string, appels: string[]): Promise<Diagnostic> {
   const texte = await texteDesCadres(page);
+  const x = suivis.get(page);
   return {
     etape,
     url: urlSansSecret(page.url()),
     titre: await page.title().catch(() => ""),
     texte: texte.slice(0, 6000),
     cadres: cadres(page).map((f) => urlSansSecret(f.url())).slice(0, 10),
+    ...(x?.structures.size ? { structures: [...x.structures.values()] } : {}),
+    ...(x?.periode ? { periodeForcee: x.periodeForcee } : {}),
+    ...(x?.export ? { export: x.export } : {}),
     appels: appels.slice(-40),
   };
 }
@@ -466,19 +603,38 @@ async function choisirMois(page: Page, mois: string, strict = false): Promise<bo
  * (dans son nom, sinon les dates affichées sur la page) prouve que c'est bien le mois complet.
  */
 async function parExport(page: Page, mois: string): Promise<{ chiffres: ChiffresCa; services: ServiceExport[] } | { note: string; services?: ServiceExport[] }> {
+  const r = await parExportBrut(page, mois);
+  if ("note" in r) {
+    suivi(page).export = {
+      note: r.note,
+      url: urlSansSecret(page.url()),
+      cadres: cadres(page).map((f) => urlSansSecret(f.url())).slice(0, 10),
+      texte: (await texteDesCadres(page)).slice(0, 2500),
+    };
+  }
+  return r;
+}
+
+async function parExportBrut(page: Page, mois: string): Promise<{ chiffres: ChiffresCa; services: ServiceExport[] } | { note: string; services?: ServiceExport[] }> {
+  imposerPeriode(page, mois);
   await page.goto(new URL("v2/shift-details", LADDITION_URL).toString(), { waitUntil: "networkidle2", timeout: 30_000 });
   await calme(page);
-  const moisChoisi = await choisirMois(page, mois, true);
+  // Période imposée aux demandes de la page : le mois est sélectionné même si le texte affiché ne le dit pas.
+  const moisChoisi = (await choisirMois(page, mois, true)) || suivi(page).periodeForcee > 0;
 
   const dossier = await mkdtemp(path.join(tmpdir(), "laddition-"));
   let recu: { nom: string; data: ArrayBuffer } | null = null;
+  // Nom donné par le serveur (avec la période), même si le corps n'est lisible que par le téléchargement.
+  let nomServeur = "";
   const surReponse = async (r: import("puppeteer-core").HTTPResponse) => {
     const type = r.headers()["content-type"] ?? "";
     if (!/spreadsheetml|ms-excel|octet-stream/i.test(type)) return;
     const dispo = r.headers()["content-disposition"] ?? "";
     const nom = decodeURIComponent(dispo.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)?.[1] ?? path.basename(new URL(r.url()).pathname));
+    nomServeur ||= nom;
     const buf = await r.buffer().catch(() => null);
-    if (buf) recu = { nom, data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer };
+    // Corps vide : demande interceptée ou fichier remis à la page (blob) ; le téléchargement prend le relais.
+    if (buf?.length) recu = { nom, data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer };
   };
   page.on("response", surReponse);
   try {
@@ -499,7 +655,8 @@ async function parExport(page: Page, mois: string): Promise<{ chiffres: Chiffres
       const f = (await readdir(dossier)).find((n) => !n.endsWith(".crdownload"));
       if (f && termine) {
         const b = await readFile(path.join(dossier, f));
-        recu = { nom: suggere || f, data: b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer };
+        const nom = [nomServeur, suggere, f].find((n) => n && periodeDuNom(n)) ?? (suggere || f);
+        recu = { nom, data: b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer };
       } else await pause(500);
     }
     const fichier = recu as { nom: string; data: ArrayBuffer } | null;
@@ -542,6 +699,7 @@ export async function extraireMois(opts: {
     });
 
     await connexion(page, opts.identifiant, opts.motDePasse, appels);
+    await suivreApi(page);
 
     if (opts.etablissement) {
       await cliquerTexte(page, opts.etablissement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -558,15 +716,21 @@ export async function extraireMois(opts: {
       throw new LadditionError(`Export « Détails par service » : ${exp.note ?? "échec"}.`, await diagnostic(page, "export", appels));
     }
 
-    // Repli : Comptabilité > Comptabilité CA/TVA, lecture du texte de la page.
-    await page.goto(LADDITION_URL, { waitUntil: "networkidle2", timeout: 30_000 }).catch(() => {});
-    await cliquerTexte(page, "^comptabilit[ée]s?$");
-    await pause(800);
-    const ok = await cliquerTexte(page, "CA\\s*/\\s*TVA");
-    if (!ok) throw new LadditionError(`Export : ${exp.note}. Menu « Comptabilité CA/TVA » introuvable.`, await diagnostic(page, "menu", appels));
+    // Repli : Comptabilité CA/TVA (/v2/vat-family), en accès direct, sinon par le menu ; lecture du texte.
+    imposerPeriode(page, opts.mois);
+    await page.goto(new URL("v2/vat-family", LADDITION_URL).toString(), { waitUntil: "networkidle2", timeout: 30_000 }).catch(() => {});
     await calme(page);
+    await attendreContenu(page);
+    if (!/TTC/i.test(await texteDesCadres(page))) {
+      await page.goto(LADDITION_URL, { waitUntil: "networkidle2", timeout: 30_000 }).catch(() => {});
+      await cliquerTexte(page, "^comptabilit[ée]s?$");
+      await pause(800);
+      const ok = await cliquerTexte(page, "CA\\s*/\\s*TVA");
+      if (!ok) throw new LadditionError(`Export : ${exp.note}. Menu « Comptabilité CA/TVA » introuvable.`, await diagnostic(page, "menu", appels));
+      await calme(page);
+    }
 
-    const periodeConfirmee = await choisirMois(page, opts.mois);
+    const periodeConfirmee = (await choisirMois(page, opts.mois)) || suivi(page).periodeForcee > 0;
     const texte = await texteDesCadres(page);
     return {
       chiffres: extraireChiffres(texte),

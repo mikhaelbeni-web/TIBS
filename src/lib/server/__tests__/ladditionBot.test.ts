@@ -32,6 +32,8 @@ const formXhr = `<form id="f"><label>Identifiant / Email</label><input type="tex
  * domaine (localhost au lieu de 127.0.0.1), bouton d'export en icône, tableau CA/TVA dans un shadow DOM.
  */
 let avecIframe = false;
+/** Détail des services façon 3.x : période fixée par l'appli, données et export par POST /api/butterfly/… */
+let avecApi = false;
 let port = 0;
 const iframe = (chemin: string) => `<iframe src="http://localhost:${port}${chemin}" style="width:1000px;height:600px;border:0"></iframe>`;
 const frJ = (d: string) => d.split("-").reverse().join("/");
@@ -66,6 +68,34 @@ beforeAll(async () => {
       res.end(page(`${menu}${iframe(avecExport ? "/pos/shift-details" : "/pos/vide")}`));
     } else if (u.pathname === "/v2/accounting" && avecIframe) {
       res.end(page(`${menu}${iframe(`/pos/accounting${u.search}`)}`));
+    } else if (u.pathname === "/v2/shift-details" && avecApi) {
+      res.end(page(`${menu}${iframe("/pos/shift-api")}`));
+    } else if (u.pathname === "/pos/shift-api") {
+      // Période fixée par l'application (30 derniers jours), sans champ ni adresse datée : seule la demande la porte.
+      res.end(page(`<p>Du 05/10/2026 au 04/11/2026</p><div id="t"></div><button aria-label="Exporter" id="x"><svg width="16" height="16"></svg></button>
+<script>
+const corps = { id_company: 19224, opening_date: "2026-10-05 00:00:00", closing_date: "2026-11-04 23:59:59" };
+fetch("/api/butterfly/array", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(corps) })
+  .then((r) => r.json()).then((l) => { document.getElementById("t").innerText = l.length + " services : " + l.map((s) => s.ca.toFixed(2).replace(".", ",") + " €").join(" "); });
+document.getElementById("x").onclick = async () => {
+  const r = await fetch("/api/butterfly/export", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(corps) });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob()); a.download = "export.xlsx"; a.click();
+};
+</script>`));
+    } else if (u.pathname === "/api/butterfly/array" || u.pathname === "/api/butterfly/export") {
+      let b = ""; req.on("data", (c) => (b += c)); req.on("end", async () => {
+        const { opening_date, closing_date } = JSON.parse(b) as { opening_date: string; closing_date: string };
+        const s = opening_date.slice(0, 10), e = closing_date.slice(0, 10);
+        const liste = SERVICES.filter(([j]) => j >= s && j <= e);
+        if (u.pathname.endsWith("/array")) {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify(liste.map(([jour, ca]) => ({ jour, ca, z_url: `https://data.laddition.com/z/${jour}.pdf` }))));
+          return;
+        }
+        res.setHeader("content-type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`detail-services-Tib’s 19-${s}-${e}.xlsx`)}`);
+        res.end(Buffer.from(await fauxExport(liste)));
+      });
     } else if (u.pathname === "/pos/vide") {
       res.end(page(`<p>Aucune donnée</p>`));
     } else if (u.pathname === "/pos/shift-details") {
@@ -190,4 +220,41 @@ it("diagnostic : filtres des API de rapports sans identifiants", async () => {
   expect(resumeCorps('{"login":"a@b.fr","password":"x","refreshToken":"abc"}')).toBe("{login=…, password=…, refreshToken=…}");
   expect(resumeCorps("a=1")).toBe("");
   expect(resumeCorps(undefined)).toBe("");
+});
+
+it.skipIf(!avecChrome)("robot : période imposée aux demandes de l'appli (sélecteur de dates non pilotable)", async () => {
+  avecApi = true;
+  avecExport = true;
+  try {
+    const { extraireMois } = await import("../ladditionBot");
+    const r = await extraireMois({ identifiant: "a@b.fr", motDePasse: "secret", mois: "2026-10" });
+    expect(r.noteExport).toBeUndefined();
+    expect(r.methode).toBe("export");
+    expect(r.chiffres).toEqual(OCTOBRE);
+    expect(r.services?.map((s) => s.jour)).toEqual(["2026-10-01", "2026-10-02", "2026-10-31"]);
+    expect(r.diagnostic.periodeForcee).toBeGreaterThanOrEqual(1);
+    expect(r.diagnostic.structures?.join("\n")).toMatch(/\/api\/butterfly\/array → \[3 × \{jour, ca, z_url\(lien\)\}\]/);
+  } finally {
+    avecApi = false;
+  }
+}, 120_000);
+
+it("période : réécriture des dates des demandes, forme des réponses", async () => {
+  const { reecrirePeriode, reecrireUrlPeriode, decrireJson, estApiRapports } = await import("../ladditionBot");
+  expect(reecrirePeriode('{"id_company":19224,"opening_date":"2026-10-05 00:00:00","closing_date":"2026-11-04 23:59:59"}', "2026-10-01", "2026-10-31")).toBe(
+    '{"id_company":19224,"opening_date":"2026-10-01 00:00:00","closing_date":"2026-10-31 23:59:59"}',
+  );
+  expect(reecrirePeriode('{"filters":{"startDate":"2026-10-05","endDate":"2026-11-04"}}', "2026-11-01", "2026-11-30")).toBe('{"filters":{"startDate":"2026-11-01","endDate":"2026-11-30"}}');
+  expect(reecrirePeriode('{"opening_date":"2026-10-01 00:00:00","closing_date":"2026-10-31 23:59:59"}', "2026-10-01", "2026-10-31")).toBeNull();
+  expect(reecrirePeriode('{"created":"2026-10-05"}', "2026-10-01", "2026-10-31")).toBeNull();
+  expect(reecrirePeriode("pas du json", "2026-10-01", "2026-10-31")).toBeNull();
+  expect(reecrireUrlPeriode("https://reporting-pos.laddition.com/api/x?start=2026-10-05&end=2026-11-04&id=1", "2026-10-01", "2026-10-31")).toBe(
+    "https://reporting-pos.laddition.com/api/x?start=2026-10-01&end=2026-10-31&id=1",
+  );
+  expect(reecrireUrlPeriode("https://reporting-pos.laddition.com/api/entity", "2026-10-01", "2026-10-31")).toBeNull();
+  expect(decrireJson({ data: [{ id: 1, url: "https://data.laddition.com/z.pdf", pay: { cb: 1 } }], total: 3 })).toBe("{data:[1 × {id, url(lien), pay:{cb}}], total}");
+  expect(estApiRapports("https://reporting-pos.laddition.com/api/butterfly/array")).toBe(true);
+  expect(estApiRapports("https://reporting-pos.laddition.com/api/auth/accessToken")).toBe(false);
+  expect(estApiRapports("https://auth.laddition.com/v2/api/auth")).toBe(false);
+  expect(estApiRapports("https://analytics.google.com/api/x")).toBe(false);
 });
