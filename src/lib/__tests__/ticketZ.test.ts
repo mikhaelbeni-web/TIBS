@@ -113,3 +113,27 @@ describe("semaine Uber du récap mail", () => {
     expect(comparerUber("2026-11-04", jours, v(60000), { today: "2026-11-10" }).statut).toBe("ecart");
   });
 });
+
+import { codeLibelle, remisesDuJour } from "../ticketZ";
+
+describe("remises CB Caisse d'Épargne", () => {
+  const lignes = [
+    { id: "1", date: "2026-10-31", amount: 120000, libelle: "CB TIB S 301026 CONTRAT 8060564" },
+    { id: "2", date: "2026-10-31", amount: 30050, libelle: "CB TIB S 301026 CONTRAT 8060565" },
+    { id: "3", date: "2026-10-31", amount: -45, libelle: "CB COM TIB S 301026" },
+    { id: "4", date: "2026-10-31", amount: -12, libelle: "CB COM TIB S 301026" },
+    { id: "5", date: "2026-11-01", amount: 99000, libelle: "CB TIB S 311026" },
+  ];
+  it("code JJMMAA", () => expect(codeLibelle("2026-10-30")).toBe("301026"));
+  it("additionne les contrats TPE et isole les frais", () => {
+    expect(remisesDuJour("2026-10-30", lignes)).toMatchObject({ remises: [{ id: "1" }, { id: "2" }], frais: 57 });
+  });
+  it("CB du Z = somme des remises du jour", () => {
+    const r = comparerCB("2026-10-30", [{ id: "z", date: "2026-10-30", amount: 150050 }], lignes.filter((l) => l.amount > 0), { lignes, today: "2026-11-05" });
+    expect(r).toMatchObject({ statut: "ok", ecart: 0, frais: 57, banque: { montant: 150050, jours: 1 } });
+  });
+  it("écart si la somme ne colle pas", () => {
+    const r = comparerCB("2026-10-30", [{ id: "z", date: "2026-10-30", amount: 160000 }], [], { lignes, today: "2026-11-05" });
+    expect(r).toMatchObject({ statut: "ecart", ecart: -9950 });
+  });
+});

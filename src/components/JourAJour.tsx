@@ -91,19 +91,20 @@ export function JourAJour({
       }
     : null;
 
-  const credits: BankLine[] = useMemo(
-    () => bank.filter((b) => b.montant > 0).map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle })),
+  const toutes: BankLine[] = useMemo(
+    () => bank.map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle })),
     [bank],
   );
+  const credits = useMemo(() => toutes.filter((b) => b.amount > 0), [toutes]);
   const cb = useMemo(
     () =>
       comparerCB(
         jour,
         cash.map((c) => ({ id: c.id, date: c.date, amount: c.cb })),
         credits.filter((b) => !isCashDeposit(b.libelle) && !isUber(b.libelle)),
-        { maxDays, maxFeeRate: maxFee / 100 },
+        { maxDays, maxFeeRate: maxFee / 100, lignes: toutes },
       ),
-    [jour, cash, credits, maxDays, maxFee],
+    [jour, cash, credits, toutes, maxDays, maxFee],
   );
   const uberJour = comparerUberJour(
     { montant: entry?.uber ?? 0, commandes: entry?.uberCommandes },
@@ -193,12 +194,25 @@ export function JourAJour({
             <Ligne label="CB du ticket Z">{formatEuros(cb.caisse)}</Ligne>
             {cb.banque ? (
               <>
-                <Ligne label={`Remise du ${fr(cb.banque.date)} (J+${cb.banque.jours})`}>{formatEuros(cb.banque.montant)}</Ligne>
-                <p className="truncate text-xs text-muted">{cb.banque.libelle}</p>
-                <Ligne label="Écart (commission)">
-                  {formatEuros(cb.ecart ?? 0)}
-                  {cb.caisse ? ` · ${((-(cb.ecart ?? 0) / cb.caisse) * 100).toFixed(2)} %` : ""}
-                </Ligne>
+                {cb.remises ? (
+                  <>
+                    {cb.remises.map((b) => (
+                      <Ligne key={b.id} label={`${fr(b.date)} · ${b.libelle.slice(0, 30)}`}>{formatEuros(b.amount)}</Ligne>
+                    ))}
+                    {cb.remises.length > 1 && <Ligne label="Total des remises">{formatEuros(cb.banque.montant)}</Ligne>}
+                    <Ligne label="Écart">{formatEuros(cb.ecart ?? 0)}</Ligne>
+                    {cb.frais ? <Ligne label="Frais CB prélevés à part">{formatEuros(-cb.frais)}</Ligne> : null}
+                  </>
+                ) : (
+                  <>
+                    <Ligne label={`Remise du ${fr(cb.banque.date)} (J+${cb.banque.jours})`}>{formatEuros(cb.banque.montant)}</Ligne>
+                    <p className="truncate text-xs text-muted">{cb.banque.libelle}</p>
+                    <Ligne label="Écart (commission)">
+                      {formatEuros(cb.ecart ?? 0)}
+                      {cb.caisse ? ` · ${((-(cb.ecart ?? 0) / cb.caisse) * 100).toFixed(2)} %` : ""}
+                    </Ligne>
+                  </>
+                )}
               </>
             ) : (
               <>
