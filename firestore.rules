@@ -101,10 +101,10 @@ service cloud.firestore {
           && request.resource.data.statut in ["valide", "rejete"];
       }
 
-      // settings/mail est tenu par le serveur (état de la boîte mail) : lecture seule pour le gérant.
+      // settings/mail et settings/banque sont tenus par le serveur : lecture seule pour le gérant.
       match /settings/{id} {
         allow read: if gerantDe(rid);
-        allow write: if gerantDe(rid) && id != "mail";
+        allow write: if gerantDe(rid) && !(id in ["mail", "banque"]);
       }
     }
 

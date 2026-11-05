@@ -3,6 +3,8 @@ import { parseReglages, releveDu } from "@/lib/reglages";
 import { RESTAURANTS, type RestaurantId } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
 import { relireIncomplets, syncMail, type SyncResult } from "@/lib/server/mailSync";
+import { releveBanqueDu } from "@/lib/banque";
+import { syncBanque, type BanqueSyncResult } from "@/lib/server/banqueSync";
 
 export const maxDuration = 300;
 
@@ -29,6 +31,13 @@ export async function GET(request: Request) {
     const left = 200_000 - (Date.now() - started);
     out[id] = await syncMail(id, { budgetMs: Math.max(10_000, left / (dus.length - i)) });
   }
+  // Relevé bancaire (DSP2) : au plus toutes les 8 heures par restaurant, indépendamment des mails.
+  const banque: Record<string, BanqueSyncResult | { status: "pas_encore" }> = {};
+  for (const r of RESTAURANTS) {
+    const etat = (await db.doc(`restaurants/${r.id}/settings/banque`).get()).data();
+    if (!etat?.connecteLe) continue;
+    banque[r.id] = releveBanqueDu(etat.dernierPassage) ? await syncBanque(r.id) : { status: "pas_encore" };
+  }
   // Avec le temps restant : relecture des PDF encore « à compléter ».
   const relu: Record<string, unknown> = {};
   for (const id of dus) {
@@ -37,5 +46,5 @@ export async function GET(request: Request) {
     if (out[id]?.status === "ok") relu[id] = await relireIncomplets(id, { budgetMs: left / 2 });
   }
   const erreur = Object.values(out).some((x) => x.status === "erreur");
-  return Response.json({ ...out, relu }, { status: erreur ? 502 : 200 });
+  return Response.json({ ...out, relu, banque }, { status: erreur ? 502 : 200 });
 }

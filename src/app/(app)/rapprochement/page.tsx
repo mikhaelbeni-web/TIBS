@@ -3,6 +3,7 @@
 import { deleteDoc, doc, setDoc, writeBatch } from "firebase/firestore";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
+import { BanqueCard } from "@/components/BanqueCard";
 import { JourAJour } from "@/components/JourAJour";
 import { bankDocId, isCashDeposit, isUber, rowToUber, rowsToCash, rowsToUberJours } from "@/lib/cashImport";
 import { useRestaurant } from "@/components/RestaurantProvider";
@@ -191,6 +192,8 @@ export default function RapprochementPage() {
       <input ref={bankFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importBank(e.target.files?.[0])} />
       <input ref={uberJoursFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importUberJours(e.target.files?.[0])} />
       <input ref={uberFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importUber(e.target.files?.[0])} />
+
+      <BanqueCard />
 
       <div className="mb-4 grid grid-cols-2 items-end gap-2 sm:max-w-xl sm:grid-cols-3">
         <div className="col-span-2 sm:col-span-1">
@@ -387,14 +390,14 @@ export default function RapprochementPage() {
       ) : (
         <div className="space-y-4">
           {monthBank.length === 0 ? (
-            <Empty>Aucune opération importée pour ce mois.</Empty>
+            <Empty>Aucune opération relevée pour ce mois.</Empty>
           ) : (
             <ul className="divide-y divide-border rounded-card border border-border bg-surface">
               {monthBank.map((b) => (
                 <li key={b.id} className="flex items-center justify-between gap-3 p-3 text-sm">
                   <div className="min-w-0">
                     <div className="truncate">{b.libelle}</div>
-                    <div className="text-xs text-muted">{fr(b.date)}</div>
+                    <div className="text-xs text-muted">{fr(b.date)}{b.source === "banque" ? "" : " · import"}</div>
                   </div>
                   <span className={`shrink-0 font-medium tabular-nums ${b.montant < 0 ? "text-danger" : "text-success"}`}>{formatEuros(b.montant)}</span>
                 </li>
