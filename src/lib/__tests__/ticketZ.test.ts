@@ -161,3 +161,17 @@ describe("export Historique des commandes du Manager Uber Eats", () => {
     expect(jours.at(-1)?.partiel).toBe(true);
   });
 });
+
+import { urlZAutorisee } from "../ticketZ";
+
+describe("lien du ticket Z de L'Addition", () => {
+  it("n'accepte que data.laddition.com", () => {
+    expect(urlZAutorisee("https://data.laddition.com/scripts/reporting.php?action=Z&format=pdf&ts=1")?.hostname).toBe("data.laddition.com");
+    expect(urlZAutorisee("http://data.laddition.com/scripts/reporting.php")?.protocol).toBe("https:");
+    expect(urlZAutorisee("https://data.laddition.com.evil.com/x")).toBeNull();
+    expect(urlZAutorisee("https://user:pw@data.laddition.com/x")).toBeNull();
+    expect(urlZAutorisee("https://data.laddition.com:8443/x")).toBeNull();
+    expect(urlZAutorisee("https://169.254.169.254/latest")).toBeNull();
+    expect(urlZAutorisee(42)).toBeNull();
+  });
+});

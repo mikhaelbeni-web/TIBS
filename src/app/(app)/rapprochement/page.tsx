@@ -6,7 +6,9 @@ import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet }
 import { BanqueCard } from "@/components/BanqueCard";
 import { JourAJour } from "@/components/JourAJour";
 import { bankDocId, isCashDeposit, isUber, rowToUber, rowsToCash, rowsToUberJours } from "@/lib/cashImport";
+import { useAuth } from "@/components/AuthProvider";
 import { useRestaurant } from "@/components/RestaurantProvider";
+import { lignesXlsx, lireExportServices } from "@/lib/ladditionExport";
 import { db } from "@/lib/firebase";
 import { readSpreadsheet, rowToBank } from "@/lib/importer";
 import { sansDoublonsImport } from "@/lib/banque";
@@ -43,6 +45,11 @@ export default function RapprochementPage() {
   const bankFile = useRef<HTMLInputElement>(null);
   const uberFile = useRef<HTMLInputElement>(null);
   const uberJoursFile = useRef<HTMLInputElement>(null);
+  const servicesFile = useRef<HTMLInputElement>(null);
+  const { user } = useAuth();
+  /** Liens des tickets Z de l'export importé : gardés en mémoire seulement (signés, ils expirent). */
+  const [zATraiter, setZATraiter] = useState<{ jour: string; url: string }[]>([]);
+  const [lectureZ, setLectureZ] = useState<string | null>(null);
 
   const { start, end, endPlus } = monthBounds(mois, 14);
   const days = useMemo(() => cash.items.filter((c) => c.date >= start && c.date <= end), [cash.items, start, end]);
@@ -129,6 +136,84 @@ export default function RapprochementPage() {
     }
   }
 
+  /** Export « Détails par service » de L'Addition : CB, espèces, Uber et TTC par taux, une journée par service. */
+  async function importServices(f?: File) {
+    if (!f) return;
+    setOpError(null);
+    try {
+      const exp = lireExportServices(await lignesXlsx(await f.arrayBuffer()));
+      if (!exp.services.length) throw new Error("Aucun service trouvé dans ce fichier.");
+      const parJour = new Map<string, { cb: number; especes: number; uber: number; ttc10: number; ttc20: number; ttc55: number; caTtcNet: number }>();
+      const liens: { jour: string; url: string }[] = [];
+      for (const sv of exp.services) {
+        const d = parJour.get(sv.jour) ?? { cb: 0, especes: 0, uber: 0, ttc10: 0, ttc20: 0, ttc55: 0, caTtcNet: 0 };
+        d.cb += sv.cb;
+        d.especes += sv.cash;
+        d.uber += sv.uber;
+        d.ttc10 += sv.ttc10;
+        d.ttc20 += sv.ttc20;
+        d.ttc55 += sv.ttc55;
+        d.caTtcNet += sv.caTtcNet;
+        parJour.set(sv.jour, d);
+        if (sv.zUrl) liens.push({ jour: sv.jour, url: sv.zUrl });
+      }
+      const existants = new Set(cash.items.map((c) => c.date));
+      const batch = writeBatch(db());
+      for (const [jour, d] of parJour) {
+        // Fusion : on ne touche pas au détail lu sur un ticket Z (paiements, nombre de commandes Uber).
+        batch.set(
+          doc(db(), "restaurants", rid, "cashEntries", jour),
+          { date: jour, ...d, ...(existants.has(jour) ? {} : { ticketsResto: 0, autres: 0, source: "import", createdAt: Date.now() }), servicesLAddition: Date.now() },
+          { merge: true },
+        );
+      }
+      await batch.commit();
+      setZATraiter(liens);
+      setInfo(
+        `${parJour.size} journée(s) L'Addition importée(s) (CB, espèces, Uber, TTC par taux).` +
+          (liens.length ? ` Lis maintenant les ${liens.length} tickets Z pour avoir le nombre de commandes Uber de chaque jour.` : ""),
+      );
+    } catch (e) {
+      setOpError((e as Error).message);
+    } finally {
+      if (servicesFile.current) servicesFile.current.value = "";
+    }
+  }
+
+  /** Fait lire chaque ticket Z de l'export par le serveur (téléchargé tout de suite, lu par l'IA). */
+  async function lireTicketsZ() {
+    if (!user || !zATraiter.length) return;
+    setOpError(null);
+    const restants = [...zATraiter];
+    const echecs: string[] = [];
+    let lus = 0;
+    for (const z of zATraiter) {
+      setLectureZ(`Lecture du Z du ${fr(z.jour)} (${lus + echecs.length + 1}/${zATraiter.length})…`);
+      try {
+        const res = await fetch(`/api/ticket-z?r=${rid}`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${await user.getIdToken()}`, "content-type": "application/json" },
+          body: JSON.stringify({ url: z.url, jour: z.jour }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) {
+          echecs.push(`${fr(z.jour)} : ${data.error ?? res.status}`);
+          // Budget atteint ou lecture désactivée : inutile de continuer.
+          if (res.status === 429 || res.status === 503) break;
+          continue;
+        }
+        lus++;
+        restants.splice(restants.indexOf(z), 1);
+      } catch (e) {
+        echecs.push(`${fr(z.jour)} : ${(e as Error).message}`);
+      }
+    }
+    setLectureZ(null);
+    setZATraiter(restants);
+    setInfo(`${lus} ticket(s) Z lu(s).`);
+    if (echecs.length) setOpError(`Tickets Z non lus : ${echecs.slice(0, 5).join(" ; ")}${echecs.length > 5 ? "…" : ""}`);
+  }
+
   async function importUberJours(f?: File) {
     if (!f) return;
     setOpError(null);
@@ -206,12 +291,14 @@ export default function RapprochementPage() {
             <Button variant="secondary" onClick={() => bankFile.current?.click()}>Importer relevé</Button>
             <Button variant="secondary" onClick={() => uberFile.current?.click()}>Importer versements Uber</Button>
             <Button variant="secondary" onClick={() => uberJoursFile.current?.click()}>Importer commandes Uber</Button>
+            <Button variant="secondary" onClick={() => servicesFile.current?.click()}>Importer services L&apos;Addition</Button>
             <Button onClick={() => setAdding(true)}>+ Journée</Button>
           </>
         }
       />
       <input ref={cashFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importCash(e.target.files?.[0])} />
       <input ref={bankFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importBank(e.target.files?.[0])} />
+      <input ref={servicesFile} type="file" accept=".xlsx" className="hidden" onChange={(e) => importServices(e.target.files?.[0])} />
       <input ref={uberJoursFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importUberJours(e.target.files?.[0])} />
       <input ref={uberFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importUber(e.target.files?.[0])} />
 
@@ -227,6 +314,14 @@ export default function RapprochementPage() {
 
       <ErrorBox message={cash.error || bank.error || uber.error || uberJours.error || opError} />
       {info && <p className="mb-3 rounded-control bg-success-soft p-3 text-sm text-success">{info}</p>}
+      {zATraiter.length > 0 && (
+        <Card className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <span className="text-sm">
+            {lectureZ ?? `${zATraiter.length} ticket(s) Z à lire depuis L'Addition (nombre de commandes Uber, détail des paiements).`}
+          </span>
+          <Button onClick={lireTicketsZ} disabled={!!lectureZ}>{lectureZ ? "Lecture…" : "Lire les tickets Z"}</Button>
+        </Card>
+      )}
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card><div className="text-xs text-muted">CB caisse</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totalCbCaisse)}</div></Card>
