@@ -71,6 +71,9 @@ export interface Invoice {
   note?: string;
   /** Restaurant concerné : 19e (SAS AVA, rue Manin) ou 17e (rue de Prony). */
   etablissement?: "19e" | "17e";
+  /** Créée par la validation automatique d'une facture reçue par mail (inboxId = ligne d'origine). */
+  auto?: boolean;
+  inboxId?: string;
   createdAt: number;
 }
 
