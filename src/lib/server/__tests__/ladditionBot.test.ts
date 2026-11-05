@@ -27,6 +27,14 @@ const formXhr = `<form id="f"><label>Identifiant / Email</label><input type="tex
   const r = await fetch("/v2/api/auth", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ login: u.value, password: p.value, scope: "bo-client" }) });
   if (r.ok) location.href = "/v2/shift-details";
 });</script>`;
+/**
+ * Pages façon reporting.laddition.com 3.x : le menu dans la page, le contenu dans une iframe d'un autre
+ * domaine (localhost au lieu de 127.0.0.1), bouton d'export en icône, tableau CA/TVA dans un shadow DOM.
+ */
+let avecIframe = false;
+let port = 0;
+const iframe = (chemin: string) => `<iframe src="http://localhost:${port}${chemin}" style="width:1000px;height:600px;border:0"></iframe>`;
+const frJ = (d: string) => d.split("-").reverse().join("/");
 let server: http.Server;
 const page = (body: string) => `<!doctype html><html><body>${body}</body></html>`;
 const menu = `<nav><div onclick="document.getElementById('sub').style.display='block'">Comptabilité</div><div id="sub" style="display:none"><a href="/v2/accounting?start=2026-11-01&end=2026-11-05">Comptabilité CA/TVA, paiements</a></div></nav>`;
@@ -54,6 +62,21 @@ beforeAll(async () => {
         if (p.get("pwd") !== "secret") { res.end(page(`<p>Erreur</p><form><input type="email"><input type="password"></form>`)); return; }
         res.statusCode = 302; res.setHeader("set-cookie", "sess=1; Path=/"); res.setHeader("location", "/v2/shift-details"); res.end();
       });
+    } else if (u.pathname === "/v2/shift-details" && avecIframe) {
+      res.end(page(`${menu}${iframe(avecExport ? "/pos/shift-details" : "/pos/vide")}`));
+    } else if (u.pathname === "/v2/accounting" && avecIframe) {
+      res.end(page(`${menu}${iframe(`/pos/accounting${u.search}`)}`));
+    } else if (u.pathname === "/pos/vide") {
+      res.end(page(`<p>Aucune donnée</p>`));
+    } else if (u.pathname === "/pos/shift-details") {
+      const s = u.searchParams.get("start"), e = u.searchParams.get("end");
+      if (!s || !e) { res.statusCode = 302; res.setHeader("location", "/pos/shift-details?start=2026-10-06&end=2026-11-05"); res.end(); return; }
+      res.end(page(`<p>Du ${frJ(s)} au ${frJ(e)}</p><button aria-label="Exporter" onclick="document.getElementById('fmt').style.display='block'"><svg width="16" height="16"></svg></button><div id="fmt" style="display:none"><a href="/export?start=${s}&end=${e}">Excel</a></div>`));
+    } else if (u.pathname === "/pos/accounting") {
+      const s = u.searchParams.get("start")!, e = u.searchParams.get("end")!;
+      const oct = s === "2026-10-01";
+      const contenu = `<h1>Du ${frJ(s)} au ${frJ(e)}</h1><table><tr><th>CA TTC net</th><th>TTC 5,5 %</th><th>TTC 10 %</th><th>TTC 20 %</th></tr><tr><td>${oct ? "200 324,25 €" : "1,00 €"}</td><td>4 272,00 €</td><td>194 680,25 €</td><td>1 372,00 €</td></tr></table>`;
+      res.end(page(`<div id="h"></div><script>document.getElementById("h").attachShadow({ mode: "open" }).innerHTML = ${JSON.stringify(contenu)};</script>`));
     } else if (u.pathname === "/v2/shift-details") {
       if (!avecExport) { res.end(page(menu)); return; }
       const s = u.searchParams.get("start"), e = u.searchParams.get("end");
@@ -73,7 +96,8 @@ beforeAll(async () => {
     } else { res.statusCode = 404; res.end(); }
   });
   await new Promise<void>((r) => server.listen(0, r));
-  process.env.LADDITION_URL = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  port = (server.address() as { port: number }).port;
+  process.env.LADDITION_URL = `http://127.0.0.1:${port}/`;
   process.env.CHROME_PATH = CHROME;
 });
 afterAll(() => server.close());
@@ -136,4 +160,34 @@ it("connexion : message d'erreur lisible, champs envoyés sans valeurs, variante
   ]);
   expect(variantesConnexion(" A@b.fr", " secret")).toHaveLength(3);
   expect(variantesConnexion("x", "   ")).toEqual([{ identifiant: "x", motDePasse: "   " }]);
+});
+
+it.skipIf(!avecChrome)("robot : contenu dans une iframe d'un autre domaine (export en icône, CA/TVA en shadow DOM)", async () => {
+  avecIframe = true;
+  try {
+    const { extraireMois } = await import("../ladditionBot");
+    avecExport = true;
+    const r = await extraireMois({ identifiant: "a@b.fr", motDePasse: "secret", mois: "2026-10" });
+    expect(r.noteExport).toBeUndefined();
+    expect(r.methode).toBe("export");
+    expect(r.chiffres).toEqual(OCTOBRE);
+    expect(r.diagnostic.cadres?.some((c) => c.includes("localhost"))).toBe(true);
+
+    avecExport = false;
+    const p = await extraireMois({ identifiant: "a@b.fr", motDePasse: "secret", mois: "2026-10" });
+    expect(p.methode).toBe("page");
+    expect(p.periodeConfirmee).toBe(true);
+    expect(p.chiffres).toEqual(OCTOBRE);
+  } finally {
+    avecIframe = false;
+    avecExport = true;
+  }
+}, 150_000);
+
+it("diagnostic : filtres des API de rapports sans identifiants", async () => {
+  const { resumeCorps } = await import("../ladditionBot");
+  expect(resumeCorps('{"startDate":"2026-10-01","endDate":"2026-10-31","entityId":45799}')).toBe('{startDate="2026-10-01", endDate="2026-10-31", entityId=45799}');
+  expect(resumeCorps('{"login":"a@b.fr","password":"x","refreshToken":"abc"}')).toBe("{login=…, password=…, refreshToken=…}");
+  expect(resumeCorps("a=1")).toBe("");
+  expect(resumeCorps(undefined)).toBe("");
 });
