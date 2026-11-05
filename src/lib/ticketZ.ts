@@ -185,6 +185,35 @@ export function comparerUber(
   return { ...base, versement, ecart, statut: Math.abs(ecart) <= tolerance && dansSemaine.length === 7 ? "ok" : "ecart" };
 }
 
+export interface ComparaisonUberBanque {
+  statut: Statut;
+  virement?: BankLine & { jours: number };
+}
+
+/**
+ * Troisième côté de la triangulation Uber : le net annoncé par le mail Uber doit arriver tel quel
+ * sur le compte (virement « UBER », entre J-2 et J+5 de la date du versement).
+ */
+export function comparerUberBanque(
+  versement: VersementUber | undefined,
+  virementsUber: BankLine[],
+  { today = new Date().toISOString().slice(0, 10) } = {},
+): ComparaisonUberBanque {
+  if (!versement) return { statut: "absent" };
+  const candidats = virementsUber
+    .map((b) => ({ ...b, jours: daysBetween(versement.date, b.date) }))
+    .filter((b) => b.jours >= -2 && b.jours <= 5 && Math.abs(b.amount - versement.montant) <= 1)
+    .sort((a, b) => Math.abs(a.jours) - Math.abs(b.jours));
+  if (candidats[0]) return { statut: "ok", virement: candidats[0] };
+  return { statut: daysBetween(versement.date, today) <= 5 ? "attente" : "ecart" };
+}
+
+/** Le pire statut l'emporte (un seul écart suffit à alerter). */
+export function pire(...s: Statut[]): Statut {
+  for (const x of ["ecart", "attente", "absent", "ok"] as Statut[]) if (s.includes(x)) return x;
+  return "absent";
+}
+
 /** Le total imprimé correspond-il à la somme des moyens de paiement ? */
 export function controleTotal(t: TicketZ): { statut: Statut; somme: number; total?: number; ecart?: number } {
   const somme = totaux(t.paiements).somme;
