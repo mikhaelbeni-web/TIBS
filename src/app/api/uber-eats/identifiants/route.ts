@@ -23,7 +23,8 @@ export async function GET(request: Request) {
   if (g instanceof Response) return g;
   const d = (await refUber(g.rid).get()).data();
   return Response.json({
-    configure: Boolean(d?.email && d?.motDePasse),
+    configure: Boolean(d?.email),
+    avecMotDePasse: Boolean(d?.motDePasse),
     email: d?.email ?? "",
     boutique: d?.boutique ?? "",
     urlProblemes: d?.urlProblemes ?? "",
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "L'adresse de la liste doit être une page de merchants.ubereats.com." }, { status: 400 });
   }
   const actuel = (await refUber(g.rid).get()).data();
-  if (!motDePasse && !actuel?.motDePasse) return Response.json({ error: "mot de passe manquant" }, { status: 400 });
+  const effacerMdp = b?.sansMotDePasse === true;
   const { FieldValue } = await import("firebase-admin/firestore");
   await refUber(g.rid).set(
     {
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
       boutique: str(b?.boutique, 120),
       urlProblemes,
       modeAuto: b?.modeAuto === true,
-      ...(motDePasse ? { motDePasse: chiffrer(motDePasse) } : {}),
+      ...(motDePasse ? { motDePasse: chiffrer(motDePasse) } : effacerMdp ? { motDePasse: FieldValue.delete() } : {}),
       // Changer de compte : on repart d'une session neuve.
       ...(actuel?.email && actuel.email !== email ? { session: FieldValue.delete(), sessionLe: FieldValue.delete() } : {}),
       majLe: Date.now(),

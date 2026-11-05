@@ -20,7 +20,7 @@ export async function GET(request: Request) {
   const dus: RestaurantId[] = [];
   for (const r of RESTAURANTS) {
     const d = (await refUber(r.id).get()).data();
-    if (d?.email && d?.motDePasse && Date.now() - (d.dernierPassage?.le ?? 0) >= INTERVALLE) dus.push(r.id);
+    if (d?.email && Date.now() - (d.dernierPassage?.le ?? 0) >= INTERVALLE) dus.push(r.id);
   }
   const out: Record<string, unknown> = {};
   const debut = Date.now();

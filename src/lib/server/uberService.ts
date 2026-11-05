@@ -41,10 +41,10 @@ async function attendreCodeSaisi(rid: RestaurantId, canal: "sms" | "mail" | "inc
 
 async function config(rid: RestaurantId, interactif = false): Promise<{ cfg: ConfigUber; modeAuto: boolean }> {
   const d = (await refUber(rid).get()).data();
-  if (!d?.email || !d?.motDePasse) throw new UberError("Identifiants Uber Eats non renseignés : ajoute-les dans Réglages.", undefined, "identifiants");
+  if (!d?.email) throw new UberError("Identifiants Uber Eats non renseignés : ajoute-les dans Réglages.", undefined, "identifiants");
   let motDePasse: string;
   try {
-    motDePasse = dechiffrer(d.motDePasse as Chiffre);
+    motDePasse = d.motDePasse ? dechiffrer(d.motDePasse as Chiffre) : "";
   } catch {
     throw new UberError("Mot de passe Uber Eats illisible (clé du serveur changée) : ressaisis-le dans Réglages.", undefined, "identifiants");
   }
