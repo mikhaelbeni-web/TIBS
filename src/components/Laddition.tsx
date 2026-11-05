@@ -104,7 +104,7 @@ export function LadditionIdentifiants() {
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Identifiant (e-mail)">
-          <Input autoComplete="off" inputMode="email" value={identifiant} onChange={(e) => setIdentifiant(e.target.value)} />
+          <Input autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} inputMode="email" value={identifiant} onChange={(e) => setIdentifiant(e.target.value)} />
         </Field>
         <Field label="Mot de passe" hint={etat?.configure ? "Laisse vide pour garder l'actuel." : undefined}>
           <Input type="password" autoComplete="new-password" value={motDePasse} onChange={(e) => setMotDePasse(e.target.value)} />

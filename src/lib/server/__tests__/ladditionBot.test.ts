@@ -19,6 +19,14 @@ const SERVICES: [string, number, number, number, number][] = [
 ];
 
 let avecExport = true;
+/** Connexion façon auth.laddition.com : formulaire JS qui appelle /v2/api/auth et répond 401 en JSON. */
+let connexionXhr = false;
+const formXhr = `<form id="f"><label>Identifiant / Email</label><input type="text" id="u"><label>Mot de passe</label><input type="password" id="p"><button type="submit">Valider</button></form>
+<script>document.getElementById("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const r = await fetch("/v2/api/auth", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ login: u.value, password: p.value, scope: "bo-client" }) });
+  if (r.ok) location.href = "/v2/shift-details";
+});</script>`;
 let server: http.Server;
 const page = (body: string) => `<!doctype html><html><body>${body}</body></html>`;
 const menu = `<nav><div onclick="document.getElementById('sub').style.display='block'">Comptabilité</div><div id="sub" style="display:none"><a href="/v2/accounting?start=2026-11-01&end=2026-11-05">Comptabilité CA/TVA, paiements</a></div></nav>`;
@@ -30,7 +38,16 @@ beforeAll(async () => {
     res.setHeader("content-type", "text/html; charset=utf-8");
     if (u.pathname === "/" || u.pathname === "/login") {
       if (connecte) { res.statusCode = 302; res.setHeader("location", "/v2/shift-details"); res.end(); return; }
+      if (connexionXhr) { res.end(page(formXhr)); return; }
       res.end(page(`<form method="post" action="/auth"><input type="email" name="email"><input type="password" name="pwd"><button>Se connecter</button></form>`));
+    } else if (u.pathname === "/v2/api/auth") {
+      let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => {
+        const { login, password } = JSON.parse(b) as { login: string; password: string };
+        res.setHeader("content-type", "application/json");
+        if (/Headless/.test(req.headers["user-agent"] ?? "")) { res.statusCode = 403; res.end(JSON.stringify({ message: "navigateur refusé" })); return; }
+        if (login !== "a@b.fr" || password !== "secret") { res.statusCode = 401; res.end(JSON.stringify({ message: "Identifiants incorrects" })); return; }
+        res.setHeader("set-cookie", "sess=1; Path=/"); res.end(JSON.stringify({ token: "eyJabc.def.ghi" }));
+      });
     } else if (u.pathname === "/auth") {
       let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => {
         const p = new URLSearchParams(b);
@@ -79,5 +96,44 @@ it.skipIf(!avecChrome)("robot : repli sur Comptabilité CA/TVA, et mauvais mot d
   expect(r.noteExport).toMatch(/export introuvable/);
   expect(r.periodeConfirmee).toBe(true);
   expect(r.chiffres).toEqual(OCTOBRE);
-  await expect(extraireMois({ identifiant: "a@b.fr", motDePasse: "faux", mois: "2026-10" })).rejects.toThrow(/refusé/);
+  await expect(extraireMois({ identifiant: "a@b.fr", motDePasse: "faux", mois: "2026-10" })).rejects.toThrow(/refuse/);
 }, 90_000);
+
+it.skipIf(!avecChrome)("robot : connexion par appel /v2/api/auth (401 lisible, espace en trop, e-mail en majuscules)", async () => {
+  avecExport = true;
+  connexionXhr = true;
+  try {
+    const { extraireMois, LadditionError } = await import("../ladditionBot");
+    // Mot de passe enregistré avec une espace finale et e-mail avec majuscules (clavier du téléphone) : 2e/3e essai.
+    const ok = await extraireMois({ identifiant: "A@b.fr", motDePasse: "secret ", mois: "2026-10", servicesSeulement: true });
+    expect(ok.services?.length).toBe(SERVICES.filter(([j]) => j.startsWith("2026-10")).length);
+
+    const e = await extraireMois({ identifiant: "a@b.fr", motDePasse: "faux", mois: "2026-10" }).catch((x) => x);
+    expect(e).toBeInstanceOf(LadditionError);
+    expect(e.message).toMatch(/refuse.*Identifiants incorrects/);
+    const c = e.diagnostic.connexion;
+    expect(c).toMatchObject({ identifiantRempli: true, motDePasseRempli: true, statut: 401, message: "Identifiants incorrects", essais: 1 });
+    expect(c.champsEnvoyes).toEqual(["login", "password", "scope"]);
+    expect(JSON.stringify(e.diagnostic)).not.toMatch(/faux/);
+  } finally {
+    connexionXhr = false;
+  }
+}, 120_000);
+
+it("connexion : message d'erreur lisible, champs envoyés sans valeurs, variantes limitées", async () => {
+  const { messageAuth, champsDuCorps, variantesConnexion } = await import("../ladditionBot");
+  expect(messageAuth('{"message":"Invalid credentials","code":401}')).toBe("Invalid credentials · 401");
+  expect(messageAuth('{"token":"eyJhbGciOi.eyJzdWIi.sig"}')).toBe("");
+  expect(messageAuth("<html><body>Unauthorized</body></html>")).toBe("");
+  expect(messageAuth("Accès refusé : eyJa.b.c")).toBe("Accès refusé : …");
+  expect(champsDuCorps('{"login":"x","password":"y"}')).toEqual(["login", "password"]);
+  expect(champsDuCorps("email=x&pwd=y")).toEqual(["email", "pwd"]);
+  expect(champsDuCorps(undefined)).toEqual([]);
+  expect(variantesConnexion("a@b.fr", "secret")).toEqual([{ identifiant: "a@b.fr", motDePasse: "secret" }]);
+  expect(variantesConnexion("Tibs", "secret ")).toEqual([
+    { identifiant: "Tibs", motDePasse: "secret " },
+    { identifiant: "Tibs", motDePasse: "secret" },
+  ]);
+  expect(variantesConnexion(" A@b.fr", " secret")).toHaveLength(3);
+  expect(variantesConnexion("x", "   ")).toEqual([{ identifiant: "x", motDePasse: "   " }]);
+});
