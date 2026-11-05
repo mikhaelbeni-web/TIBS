@@ -1,6 +1,6 @@
 import "server-only";
 import { FieldValue } from "firebase-admin/firestore";
-import { doutesFacture, factureAutoId, type Doute } from "@/lib/autoValidation";
+import { doutesFacture, factureAutoId, nomDansLeMail, type Doute } from "@/lib/autoValidation";
 import type { InboxFacture } from "@/lib/ingest";
 import { emailOf, mergeRules, senderMatches, type MailRules } from "@/lib/mail";
 import { normNumero } from "@/lib/releves";
@@ -83,8 +83,10 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
     const email = emailOf(item.source?.from ?? "");
     const reconnu = fournisseurDeLExpediteur(email, rulesDe.get(item.source?.boite ?? rid)!, suppliers, boites);
     const fiches = suppliers.filter((s) => low(s.nom) === nom);
-    // Connu = l'expéditeur désigne ce fournisseur-là, et une seule fiche porte ce nom dans ce restaurant.
-    const connu = reconnu !== null && low(reconnu) === nom && fiches.length <= 1;
+    // Connu = l'expéditeur désigne ce fournisseur-là (règles, fiche), ou bien le mail porte le nom lu sur le PDF ;
+    // jamais un mail transféré depuis une boîte du restaurant, et une seule fiche à ce nom.
+    const parLeMail = reconnu === null && !boites.includes(email) && nomDansLeMail(item.fournisseur, item.source ?? {});
+    const connu = ((reconnu !== null && low(reconnu) === nom) || parLeMail) && fiches.length <= 1;
     const fiche = fiches[0];
     const numero = normNumero(item.numero ?? "");
     const deCeFournisseur = invoices.filter((i) => (fiche && i.supplierId === fiche.id) || i.nom === nom);
@@ -102,6 +104,7 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
       restaurant: rid,
       ...(Number.isFinite(recu) ? { recuLe: parisJour(recu) } : {}),
       fournisseurConnu: connu,
+      fournisseurNouveau: parLeMail && fiches.length === 0,
       doublon,
       historiqueTTC: deCeFournisseur.map((i) => i.ttc).filter((n) => Number.isFinite(n) && n > 0),
       remiseAVerifier: d.get("remiseAVerifier") === true,
