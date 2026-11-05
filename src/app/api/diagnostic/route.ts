@@ -4,7 +4,7 @@ import { connection } from "next/server";
 
 /**
  * GET /api/diagnostic : dit quelles variables Vercel sont en place, sans jamais afficher leur valeur.
- * Sert à dépanner la connexion Gmail.
+ * Sert à dépanner la connexion Gmail et l'accès bancaire.
  */
 export async function GET() {
   await connection();
@@ -46,6 +46,18 @@ export async function GET() {
     out.authentification = "ok";
   } catch (e) {
     out.authentification = `erreur : ${(e as Error).message}`;
+  }
+  // Accès bancaire : un vrai appel signé à Enable Banking (liste des banques françaises).
+  if (out.ENABLEBANKING_APP_ID === "ok" && out.ENABLEBANKING_PRIVATE_KEY === "ok") {
+    try {
+      const { banques } = await import("@/lib/server/enableBanking");
+      const liste = await banques();
+      out.banque = liste.some((b) => /caisse d.?epargne ile de france/i.test(b.name))
+        ? "ok"
+        : `connectée, mais Caisse d'Epargne Ile de France absente (${liste.length} banques)`;
+    } catch (e) {
+      out.banque = `erreur : ${(e as Error).message}`;
+    }
   }
   const toutOk = Object.values(out).every((v) => v === "ok");
   return Response.json({ toutOk, ...out }, { headers: { "cache-control": "no-store" } });
