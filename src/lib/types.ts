@@ -117,6 +117,8 @@ export interface BankTransaction {
   date: string; // AAAA-MM-JJ
   libelle: string;
   montant: number; // centimes, positif = crédit
+  details?: string; // informations complémentaires de la banque
+  type?: string; // type d'opération donné par la banque
   importId: string;
   createdAt: number;
 }

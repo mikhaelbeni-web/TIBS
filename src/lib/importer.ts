@@ -17,7 +17,7 @@ export async function readSpreadsheet(file: File): Promise<Row[]> {
   const name = file.name.toLowerCase();
   if (name.endsWith(".csv") || name.endsWith(".txt")) {
     const Papa = (await import("papaparse")).default;
-    const text = await decodeText(await file.arrayBuffer());
+    const text = debutTableau(await decodeText(await file.arrayBuffer()));
     const res = Papa.parse<Row>(text, {
       header: true,
       skipEmptyLines: true,
@@ -50,6 +50,23 @@ export async function readSpreadsheet(file: File): Promise<Row[]> {
     return rows;
   }
   throw new Error("Format non pris en charge : utilisez .xlsx ou .csv (les anciens .xls doivent être réenregistrés en .xlsx)");
+}
+
+/**
+ * Certains exports (Caisse d'Épargne : code banque, n° de compte, solde…) ont quelques lignes avant
+ * le tableau. On repart de la première ligne qui ressemble à des en-têtes : une colonne « Date… »
+ * et une colonne libellé, montant, débit ou crédit.
+ */
+export function debutTableau(text: string): string {
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < Math.min(lines.length, 30); i++) {
+    const cells = lines[i].split(/[;,\t]/).map(normalizeHeader);
+    if (cells.length < 3) continue;
+    const date = cells.some((c) => c.startsWith("date"));
+    const autre = cells.some((c) => /^(libelle|montant|debit|credit|description)/.test(c));
+    if (date && autre) return lines.slice(i).join("\n");
+  }
+  return text;
 }
 
 /** Les exports bancaires français sont souvent en Windows-1252 : on tente UTF-8 puis on retombe dessus. */
@@ -108,12 +125,18 @@ export interface BankDraft {
   date: string;
   libelle: string;
   montant: number;
+  /** Informations complémentaires de la banque (référence de facture, n° de contrat, période…). */
+  details?: string;
+  /** Type d'opération donné par la banque (Remise CB, Prélèvement SDD, Virement, Dépôt espèces…). */
+  type?: string;
 }
 
 /** Accepte une colonne Montant signée, ou deux colonnes Débit / Crédit. Les lignes illisibles sont ignorées. */
 export function rowToBank(row: Row): BankDraft | null {
   const date = toIsoDate(pick(row, ["date", "date operation", "date de l'operation", "date comptable", "date valeur"]));
-  const libelle = str(pick(row, ["libelle", "libellé", "description", "intitule", "detail"]));
+  const libelle = str(pick(row, ["libelle", "libellé", "libelle simplifie", "libelle operation", "description", "intitule", "detail"]));
+  const details = str(pick(row, ["informations complementaires", "complement", "complement libelle"])).slice(0, 300);
+  const type = str(pick(row, ["type operation", "type d'operation", "type"])).slice(0, 60);
   let montant = toCents(pick(row, ["montant", "montant eur", "montant (eur)", "somme"]));
   if (montant === null) {
     const credit = toCents(pick(row, ["credit", "crédit", "credit eur"])) ?? 0;
@@ -122,5 +145,5 @@ export function rowToBank(row: Row): BankDraft | null {
     if (credit === 0 && debit === 0) montant = null;
   }
   if (!date || montant === null) return null;
-  return { date, libelle, montant };
+  return { date, libelle, montant, ...(details ? { details } : {}), ...(type ? { type } : {}) };
 }

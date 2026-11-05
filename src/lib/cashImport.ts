@@ -55,9 +55,12 @@ export function bankDocId(date: string, montant: number, libelle: string, occurr
   return `${date}_${montant}_${slug}_${occurrence}`;
 }
 
-/** Virement Uber Eats sur le relevé bancaire. */
+/**
+ * Virement Uber Eats sur le relevé bancaire. Uber verse depuis sa structure néerlandaise :
+ * à la Caisse d'Épargne le libellé est tronqué en « VIR SEPA STICHTING CUSTODIAN UB ».
+ */
 export function isUber(libelle: string): boolean {
-  return /uber/i.test(libelle);
+  return /uber|stichting custodian/i.test(libelle);
 }
 
 export interface UberDraft {
