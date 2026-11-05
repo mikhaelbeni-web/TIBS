@@ -51,7 +51,8 @@ export function contestationConfirmee(texte: string): boolean {
 export function demandeCode(texte: string): "sms" | "mail" | "inconnu" | null {
   const t = plat(texte);
   if (!/code/.test(t) || !/(saisi|entre|envoy|recu|verification|4 chiffres|6 chiffres|enter|sent|digit|verify)/.test(t)) return null;
-  if (/sms|telephone|phone|\+33|numero|number/.test(t) && !/e-?mail|adresse|address/.test(t)) return "sms";
+  if (/\bsms\b|texto/.test(t)) return "sms";
+  if (/telephone|phone|\+33|numero|number/.test(t) && !/e-?mail|adresse|address/.test(t)) return "sms";
   if (/e-?mail|adresse|address|boite|@/.test(t)) return "mail";
   return "inconnu";
 }
@@ -59,6 +60,19 @@ export function demandeCode(texte: string): "sms" | "mail" | "inconnu" | null {
 /** Uber a-t-il affiché une vérification anti-robot ? */
 export function antiRobot(texte: string): boolean {
   return /captcha|verifiez que vous etes humain|verify you are human|are you a robot|etes-vous un robot|puzzle|security check|controle de securite|activite inhabituelle|unusual activity/.test(plat(texte));
+}
+
+/** Page qui demande le numéro de téléphone du compte (Uber le demande après l'e-mail). */
+export function demandeTelephone(texte: string): boolean {
+  return /telephone|phone|mobile|portable/.test(plat(texte));
+}
+
+/** Numéro au format international (+33641791491) depuis « 06 41 79 14 91 », « +33 6… » ou « 0033 6… » ; null si illisible. */
+export function telephoneInternational(numero: string): string | null {
+  let n = numero.replace(/[^\d+]/g, "");
+  if (n.startsWith("00")) n = "+" + n.slice(2);
+  if (/^0\d{9}$/.test(n)) n = "+33" + n.slice(1);
+  return /^\+\d{8,15}$/.test(n) ? n : null;
 }
 
 /** Boutique « Tib's (K) » : ne garder que les lignes de la boutique de ce restaurant, si elle est renseignée. */

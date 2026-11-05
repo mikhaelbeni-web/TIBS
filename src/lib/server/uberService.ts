@@ -71,6 +71,7 @@ async function config(rid: RestaurantId, interactif = false): Promise<{ cfg: Con
     cfg: {
       email: d.email,
       motDePasse,
+      telephone: d.telephone || undefined,
       urlProblemes: d.urlProblemes || undefined,
       boutique: d.boutique || undefined,
       cookies,

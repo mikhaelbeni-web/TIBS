@@ -1,13 +1,14 @@
 import { adminDb } from "@/lib/server/admin";
 import { requireGerant, restaurantParam } from "@/lib/server/authz";
 import { chiffrer } from "@/lib/server/secretBox";
+import { telephoneInternational } from "@/lib/uberEats";
 import { refUber } from "@/lib/server/uberService";
 
 /**
  * Identifiants Uber Eats Manager d'un restaurant (restaurants/{rid}/private/ubereats, inaccessible au navigateur),
  * mot de passe chiffré AES-256-GCM, jamais renvoyé.
  * GET    ?r=19e : état (e-mail, boutique, adresse de la liste, mode automatique, dernier passage du robot).
- * POST   ?r=19e { email, motDePasse?, boutique?, urlProblemes?, modeAuto? }
+ * POST   ?r=19e { email, motDePasse?, telephone?, boutique?, urlProblemes?, modeAuto? }
  * DELETE ?r=19e : oublie identifiants et session.
  */
 async function garde(request: Request) {
@@ -26,6 +27,7 @@ export async function GET(request: Request) {
     configure: Boolean(d?.email),
     avecMotDePasse: Boolean(d?.motDePasse),
     email: d?.email ?? "",
+    telephone: d?.telephone ?? "",
     boutique: d?.boutique ?? "",
     urlProblemes: d?.urlProblemes ?? "",
     modeAuto: d?.modeAuto === true,
@@ -44,6 +46,10 @@ export async function POST(request: Request) {
   const motDePasse = typeof b?.motDePasse === "string" ? b.motDePasse.slice(0, 200) : "";
   const urlProblemes = str(b?.urlProblemes, 600);
   if (!email) return Response.json({ error: "e-mail manquant" }, { status: 400 });
+  const telephone = str(b?.telephone, 30);
+  if (telephone && !telephoneInternational(telephone)) {
+    return Response.json({ error: "Numéro de téléphone illisible : écris-le comme 06 12 34 56 78 ou +33 6 12 34 56 78." }, { status: 400 });
+  }
   if (urlProblemes && !/^https:\/\/([a-z0-9-]+\.)*ubereats\.com\//i.test(urlProblemes)) {
     return Response.json({ error: "L'adresse de la liste doit être une page de merchants.ubereats.com." }, { status: 400 });
   }
@@ -53,6 +59,7 @@ export async function POST(request: Request) {
   await refUber(g.rid).set(
     {
       email,
+      telephone,
       boutique: str(b?.boutique, 120),
       urlProblemes,
       modeAuto: b?.modeAuto === true,

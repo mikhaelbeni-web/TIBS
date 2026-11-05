@@ -1,6 +1,6 @@
 import "server-only";
 import { lireCopieUber, type LigneUber } from "@/lib/contestations";
-import { antiRobot, codeUberDepuisMail, contestationConfirmee, demandeCode, ligneDeLaBoutique, montantRetenu, UBER_MANAGER_URL } from "@/lib/uberEats";
+import { antiRobot, codeUberDepuisMail, contestationConfirmee, demandeCode, demandeTelephone, ligneDeLaBoutique, montantRetenu, telephoneInternational, UBER_MANAGER_URL } from "@/lib/uberEats";
 import { bodyText, header } from "@/lib/mail";
 import { getMessage, listMessageIds } from "@/lib/server/google";
 import { calme, cliquerTexte, diagnostic, lancer, pause, urlSansSecret, type Diagnostic, type Page } from "@/lib/server/ladditionBot";
@@ -34,6 +34,8 @@ export class UberError extends Error {
 export interface ConfigUber {
   email: string;
   motDePasse: string; // vide : connexion par code seulement
+  /** Numéro du compte Uber : Uber le demande après l'e-mail, puis envoie le code par SMS. */
+  telephone?: string;
   urlProblemes?: string;
   boutique?: string;
   cookies?: string; // JSON des cookies de la dernière session
@@ -134,7 +136,54 @@ const SEL_EMAIL = ["#PHONE_NUMBER_or_EMAIL_ADDRESS", "input[type=email]", "input
 const SEL_MDP = ["#PASSWORD", "input[type=password]"].join(", ");
 // Champs qui ne servent qu'à un code (sûrs), puis champs plausibles quand la page parle d'un code.
 const SEL_CODE_SUR = ["input[autocomplete=one-time-code]", "input[id*=OTP]", "input[name*=otp i]"].join(", ");
-const SEL_CODE = [SEL_CODE_SUR, "input[id*=code i]", "input[name*=code i]", "input[inputmode=numeric]"].join(", ");
+const SEL_CODE = [SEL_CODE_SUR, "input[id*=code i]", "input[name*=code i]", "input[inputmode=numeric]", "input[type=tel]", "input[type=number]"].join(", ");
+const SEL_TEL = ["input[type=tel]", "input[autocomplete^=tel]", "input[id*=phone i]", "input[name*=phone i]", "input[id*=mobile i]"].join(", ");
+
+/**
+ * Champ « numéro de téléphone » : un seul champ téléphone visible, qui n'est ni le champ « téléphone ou e-mail »
+ * de la première page, ni une case de code (identifiant OTP/code, ou longueur maximale de 1 à 8 chiffres).
+ */
+async function champTelephone(page: Page) {
+  const champs = [];
+  for (const el of await page.$$(SEL_TEL)) {
+    if (!(await el.isVisible().catch(() => false))) continue;
+    const i = await el.evaluate((e) => {
+      const x = e as HTMLInputElement;
+      return { id: x.id, nom: x.name, ac: x.getAttribute("autocomplete") ?? "", max: x.maxLength };
+    });
+    if (i.id === "PHONE_NUMBER_or_EMAIL_ADDRESS" || /otp|code/i.test(i.id + i.nom) || i.ac === "one-time-code" || (i.max > 0 && i.max <= 8)) continue;
+    champs.push(el);
+  }
+  return champs.length === 1 ? champs[0] : null;
+}
+
+/**
+ * Tape le numéro : si un sélecteur de pays est à côté du champ, on choisit la France quand c'est une liste,
+ * puis on tape le numéro sans l'indicatif affiché ; sinon au format international (+33…).
+ */
+async function taperTelephone(page: Page, champ: NonNullable<Awaited<ReturnType<typeof champTelephone>>>, international: string): Promise<string> {
+  const indicatif = await champ.evaluate((e, intl) => {
+    let n: HTMLElement | null = e.parentElement;
+    for (let i = 0; i < 5 && n; i++, n = n.parentElement) {
+      const liste = n.querySelector("select");
+      if (liste) {
+        const fr = [...liste.options].find((o) => /^fr$/i.test(o.value) || /france|\+33\b/i.test(o.text));
+        if (fr && intl.startsWith("+33") && liste.value !== fr.value) {
+          liste.value = fr.value;
+          liste.dispatchEvent(new Event("change", { bubbles: true }));
+          return "+33";
+        }
+      }
+      const m = n.innerText?.match(/\+\d{1,4}\b/);
+      if (m) return m[0];
+    }
+    return null;
+  }, international);
+  const saisie = indicatif && international.startsWith(indicatif) ? international.slice(indicatif.length) : international;
+  await champ.click({ count: 3 });
+  await champ.type(saisie, { delay: 30 });
+  return indicatif ? `indicatif ${indicatif} affiché, tapé ${saisie}` : `tapé ${saisie}`;
+}
 // Champ quelconque où taper un code tapé par le gérant quand la page n'est pas reconnue.
 const SEL_SAISIE = "input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=email]):not([type=password]):not([type=submit]):not([type=search])";
 
@@ -225,6 +274,9 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
       if (cfg.suivi) await cfg.suivi({ etape: m, journal: journal.slice(-20), capture: await capture(page, 35) }).catch(() => {});
     };
     const d = (etape: string) => diag(page, etape, appels, journal);
+    // Texte de la page au moment où l'e-mail puis le numéro ont été envoyés : la même page revenue = Uber n'a pas avancé.
+    let pageEmail: string | null = null;
+    let pageTel: string | null = null;
 
     await page.goto(UBER_MANAGER_URL, { waitUntil: "networkidle2", timeout: 40_000 }).catch(() => {});
     await calme(page);
@@ -257,6 +309,27 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
         continue;
       }
 
+      // Page « numéro de téléphone » (après l'e-mail) : champ téléphone dédié, ou le champ de la 1re page redemandé.
+      if (!(await visible(page, SEL_CODE_SUR)) && pageTel === null) {
+        const champ =
+          (await champTelephone(page)) ??
+          (pageEmail !== null && t !== pageEmail && demandeTelephone(t) ? await visible(page, "#PHONE_NUMBER_or_EMAIL_ADDRESS") : null);
+        if (champ) {
+          const numero = telephoneInternational(cfg.telephone ?? "");
+          if (!numero) {
+            throw new UberError("Uber demande le numéro de téléphone du compte : ajoute-le dans Réglages.", await d("téléphone"), "identifiants");
+          }
+          const comment = await taperTelephone(page, champ, numero);
+          pageTel = t;
+          await valider(page);
+          await note(`Numéro de téléphone envoyé à Uber (${comment})`);
+          if ((await champTelephone(page)) && /invalide|invalid|incorrect|n.est pas valide|not valid/i.test(await texte(page))) {
+            throw new UberError("Uber refuse le numéro de téléphone : vérifie-le dans Réglages.", await d("téléphone refusé"), "identifiants");
+          }
+          continue;
+        }
+      }
+
       const code = (await visible(page, SEL_CODE_SUR)) ?? (demandeCode(t) ? await visible(page, SEL_CODE) : null);
       if (code) {
         // On préfère le mot de passe quand Uber propose « Plus d'options ».
@@ -267,7 +340,7 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
             continue;
           }
         }
-        const canal = demandeCode(t) ?? "inconnu";
+        const canal = demandeCode(t) ?? (pageTel !== null ? "sms" : "inconnu");
         await note(`Uber demande un code${canal === "sms" ? " envoyé par SMS" : canal === "mail" ? " envoyé par mail" : ""} : tape-le dans l'app`);
         const lu = await obtenirCode(cfg, canal, debut);
         if (!lu) {
@@ -290,6 +363,10 @@ export async function ouvrirUber(cfg: ConfigUber): Promise<SessionUber> {
 
       const email = await visible(page, SEL_EMAIL);
       if (email) {
+        if (pageEmail !== null && t === pageEmail && /introuvable|not found|aucun compte|no account|invalide|invalid/i.test(t)) {
+          throw new UberError("Uber ne reconnaît pas l'e-mail du compte : vérifie-le dans Réglages.", await d("e-mail refusé"), "identifiants");
+        }
+        pageEmail = t;
         await email.click({ count: 3 });
         await email.type(cfg.email, { delay: 25 });
         await valider(page);
