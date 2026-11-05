@@ -14,7 +14,7 @@ describe("export « Détails par service »", () => {
     const exp = lireExportServices(await lignesXlsx(await fauxExport(SERVICES)));
     expect(exp.etablissement).toBe("Tib’s 19");
     expect(exp.services).toHaveLength(3);
-    expect(exp.services[0]).toMatchObject({ jour: "2026-10-01", caTtcNet: 1154035, cash: 10000, uber: 10000 });
+    expect(exp.services[0]).toMatchObject({ jour: "2026-10-01", caTtcNet: 1154035, cash: 10000, uber: 10000, zUrl: "https://data.laddition.com/z.pdf" });
     const per = periodeDuNom("detail-services-Tib’s 19-2026-10-01-2026-10-31.xlsx");
     const r = chiffresDuMois(exp, "2026-10", per);
     expect(r).toEqual({ chiffres: { caTtcNet: 20032425, ttc10: 19468025, ttc20: 137200, ttc55: 427200 }, nbServices: 3, complet: true });

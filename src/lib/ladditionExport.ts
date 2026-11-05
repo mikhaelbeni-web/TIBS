@@ -15,6 +15,8 @@ export interface ServiceExport {
   cash: number;
   cb: number;
   uber: number;
+  /** Lien signé vers le PDF du ticket Z du service (colonne URL), s'il est présent. */
+  zUrl?: string;
 }
 
 export interface ExportServices {
@@ -48,6 +50,7 @@ const COLONNES = {
   cash: ["cash", "especes"],
   cb: ["cb"],
   uber: ["uber", "ubereats"],
+  url: ["url", "lien"],
 } as const;
 
 /** Lit les lignes brutes de la feuille (tableaux de cellules, en-têtes compris). */
@@ -74,7 +77,15 @@ export function lireExportServices(rows: unknown[][]): ExportServices {
     }
     const m = premiere.match(/^Du\s+(\d{2})\/(\d{2})\/(\d{4})/i);
     if (!m) continue;
-    services.push({ jour: `${m[3]}-${m[2]}-${m[1]}`, ...chiffres(r), cash: val(r, "cash"), cb: val(r, "cb"), uber: val(r, "uber") });
+    const url = col.url >= 0 ? String(r[col.url] ?? "").trim() : "";
+    services.push({
+      jour: `${m[3]}-${m[2]}-${m[1]}`,
+      ...chiffres(r),
+      cash: val(r, "cash"),
+      cb: val(r, "cb"),
+      uber: val(r, "uber"),
+      ...(/^https:\/\//.test(url) ? { zUrl: url } : {}),
+    });
   }
   const etablissement = String(rows[h][0] ?? "").match(/\(([^)]+)\)/)?.[1] ?? "";
   return { etablissement, total, services };
