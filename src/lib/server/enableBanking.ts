@@ -1,7 +1,7 @@
 import "server-only";
 import { createHmac, createPrivateKey, type KeyObject } from "node:crypto";
 import { SignJWT } from "jose";
-import type { EbTransaction } from "@/lib/banque";
+import { normaliserPem, type EbTransaction } from "@/lib/banque";
 import { safeEqual } from "@/lib/ingest";
 import { isRestaurantId, type RestaurantId } from "@/lib/restaurants";
 
@@ -23,15 +23,15 @@ export function configuree(): boolean {
 let cle: { id: string; key: KeyObject } | null = null;
 function app(): { id: string; key: KeyObject } {
   const id = process.env.ENABLEBANKING_APP_ID?.trim();
-  let pem = process.env.ENABLEBANKING_PRIVATE_KEY?.trim();
-  if (!id || !pem) throw new BanqueNonConfiguree("ENABLEBANKING_APP_ID et ENABLEBANKING_PRIVATE_KEY doivent être renseignés dans Vercel.");
+  const brut = process.env.ENABLEBANKING_PRIVATE_KEY?.trim();
+  if (!id || !brut) throw new BanqueNonConfiguree("ENABLEBANKING_APP_ID et ENABLEBANKING_PRIVATE_KEY doivent être renseignés dans Vercel.");
   if (cle?.id === id) return cle;
-  if (!pem.includes("-----BEGIN")) pem = Buffer.from(pem, "base64").toString("utf8");
-  pem = pem.replace(/\\n/g, "\n");
+  const n = normaliserPem(brut);
+  if ("erreur" in n) throw new BanqueNonConfiguree(`ENABLEBANKING_PRIVATE_KEY : ${n.erreur}`);
   try {
-    cle = { id, key: createPrivateKey(pem) };
-  } catch {
-    throw new BanqueNonConfiguree("ENABLEBANKING_PRIVATE_KEY est illisible : colle tout le fichier .pem, de « -----BEGIN » à la fin.");
+    cle = { id, key: createPrivateKey(n.pem) };
+  } catch (e) {
+    throw new BanqueNonConfiguree(`ENABLEBANKING_PRIVATE_KEY illisible (${(e as Error).message.slice(0, 80)}) : recolle tout le fichier .pem.`);
   }
   return cle;
 }

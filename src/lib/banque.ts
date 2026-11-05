@@ -148,3 +148,30 @@ export function trierBanques<T extends { name: string }>(banques: T[]): T[] {
   const score = (n: string) => (/caisse d.?epargne|caisse d.?épargne/i.test(n) ? (/ile.de.france|île.de.france/i.test(n) ? 0 : 1) : 2);
   return [...banques].sort((a, b) => score(a.name) - score(b.name) || a.name.localeCompare(b.name, "fr"));
 }
+
+/**
+ * Remet en forme une clé privée PEM collée dans Vercel : guillemets, « \n » littéraux, retours à la ligne
+ * remplacés par des espaces, base64 du fichier entier ou corps base64 seul. Renvoie la cause si ce n'est pas une clé privée.
+ */
+export function normaliserPem(brut: string): { pem: string } | { erreur: string } {
+  let s = brut.trim().replace(/^["']|["']$/g, "").replace(/\\r/g, "").replace(/\\n/g, "\n").trim();
+  if (!s.includes("-----BEGIN")) {
+    let decode = "";
+    try {
+      decode = atob(s.replace(/\s+/g, ""));
+    } catch {
+      /* pas du base64 */
+    }
+    if (decode.includes("-----BEGIN")) s = decode;
+    else if (/^[A-Za-z0-9+/=\s]{200,}$/.test(s)) s = `-----BEGIN PRIVATE KEY-----\n${s}\n-----END PRIVATE KEY-----`;
+    else return { erreur: "le texte collé ne contient pas « -----BEGIN … PRIVATE KEY----- » : colle le contenu du fichier .pem, pas son nom." };
+  }
+  const m = s.match(/-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----/);
+  if (!m) return { erreur: "la fin « -----END … PRIVATE KEY----- » manque : le texte a été coupé, recolle tout le fichier." };
+  const type = m[1];
+  if (!/PRIVATE KEY/.test(type)) return { erreur: `c'est un « ${type} », pas la clé privée : prends le fichier .pem téléchargé à la création de l'appli.` };
+  const corps = m[2].replace(/[^A-Za-z0-9+/=]/g, "");
+  if (corps.length < 200) return { erreur: "la clé est trop courte : le texte a été coupé, recolle tout le fichier." };
+  const lignes = corps.match(/.{1,64}/g) ?? [];
+  return { pem: `-----BEGIN ${type}-----\n${lignes.join("\n")}\n-----END ${type}-----\n` };
+}

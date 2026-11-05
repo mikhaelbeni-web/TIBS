@@ -69,3 +69,33 @@ describe("banque DSP2", () => {
     expect(l.map((b) => b.name)).toEqual(["Caisse d'Epargne Ile de France", "Caisse d'Epargne Normandie", "BNP Paribas"]);
   });
 });
+
+import { generateKeyPairSync, createPrivateKey } from "node:crypto";
+import { normaliserPem } from "../banque";
+
+describe("normaliserPem", () => {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pkcs8 = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+  const pkcs1 = privateKey.export({ format: "pem", type: "pkcs1" }).toString();
+  const ok = (s: string) => {
+    const r = normaliserPem(s);
+    if ("erreur" in r) throw new Error(r.erreur);
+    return createPrivateKey(r.pem).asymmetricKeyType;
+  };
+
+  it("accepte le fichier tel quel, PKCS8 ou PKCS1", () => {
+    expect(ok(pkcs8)).toBe("rsa");
+    expect(ok(pkcs1)).toBe("rsa");
+  });
+  it("répare les retours à la ligne perdus ou échappés, les guillemets, le base64 du fichier", () => {
+    expect(ok(pkcs8.replace(/\n/g, " "))).toBe("rsa");
+    expect(ok(pkcs8.replace(/\n/g, "\r\n"))).toBe("rsa");
+    expect(ok(`"${pkcs8.replace(/\n/g, "\\n")}"`)).toBe("rsa");
+    expect(ok(Buffer.from(pkcs8).toString("base64"))).toBe("rsa");
+  });
+  it("explique un texte coupé, un certificat ou un nom de fichier", () => {
+    expect(normaliserPem(pkcs8.slice(0, 300))).toHaveProperty("erreur");
+    expect(normaliserPem("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----")).toEqual({ erreur: expect.stringContaining("CERTIFICATE") });
+    expect(normaliserPem("2307a280.pem")).toHaveProperty("erreur");
+  });
+});
