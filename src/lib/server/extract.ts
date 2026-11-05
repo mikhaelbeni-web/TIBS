@@ -2,6 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
+import { detectEtablissement } from "@/lib/mail";
 import { toIsoDate } from "@/lib/money";
 import { coutUsd, MODELES, type Reglages } from "@/lib/reglages";
 
@@ -75,6 +76,7 @@ const FactureSchema = z.object({
   montant_tva: z.number().nullable().describe("facture/avoir : total de TVA en euros"),
   montant_ttc: z.number().nullable().describe("facture/avoir : total TTC / net à payer. relevé : total des factures et avoirs de la période (hors solde antérieur)"),
   net_a_payer: z.number().nullable().describe("relevé : net / solde à payer indiqué (peut inclure le solde antérieur et déduire les règlements), null si absent"),
+  adresse_client: z.string().describe("facture/avoir : nom et adresse du client facturé ou livré (le restaurant), tels qu'écrits, chaîne vide si absents"),
   compte_client: z.string().describe("relevé : n° de compte client ou adresse de livraison, chaîne vide si absent"),
   periode_debut: z.string().describe("relevé : premier jour de la période AAAA-MM-JJ, sinon chaîne vide"),
   periode_fin: z.string().describe("relevé : dernier jour de la période AAAA-MM-JJ, sinon chaîne vide"),
@@ -108,6 +110,8 @@ export interface ExtractedFacture {
   montantHT?: number;
   montantTVA?: number;
   montantTTC?: number;
+  /** Restaurant facturé d'après l'adresse client imprimée sur le PDF. */
+  etablissementPdf?: "19e" | "17e";
 }
 
 export interface ReleveLigne {
@@ -219,6 +223,7 @@ export async function extractFacture(
     montantHT: signed(r.montant_ht),
     montantTVA: signed(r.montant_tva),
     montantTTC: signed(r.montant_ttc),
+    etablissementPdf: detectEtablissement(r.adresse_client ?? ""),
   });
 }
 

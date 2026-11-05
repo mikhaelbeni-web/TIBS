@@ -3,6 +3,7 @@ import { parseReglages, releveDu } from "@/lib/reglages";
 import { RESTAURANTS, type RestaurantId } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
 import { relireIncomplets, syncMail, type SyncResult } from "@/lib/server/mailSync";
+import { validerAutomatiquement, type AutoResult } from "@/lib/server/autoValider";
 import { releveBanqueDu } from "@/lib/banque";
 import { syncBanque, type BanqueSyncResult } from "@/lib/server/banqueSync";
 
@@ -45,6 +46,11 @@ export async function GET(request: Request) {
     if (left < 15_000) break;
     if (out[id]?.status === "ok") relu[id] = await relireIncomplets(id, { budgetMs: left / 2 });
   }
+  // Validation automatique des factures cohérentes, à chaque réveil et pour les deux restaurants (arriéré compris).
+  const auto: Record<string, AutoResult | { erreur: string }> = {};
+  for (const r of RESTAURANTS) {
+    auto[r.id] = await validerAutomatiquement(r.id).catch((e) => ({ erreur: (e as Error).message }));
+  }
   const erreur = Object.values(out).some((x) => x.status === "erreur");
-  return Response.json({ ...out, relu, banque }, { status: erreur ? 502 : 200 });
+  return Response.json({ ...out, relu, banque, auto }, { status: erreur ? 502 : 200 });
 }
