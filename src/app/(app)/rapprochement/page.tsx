@@ -1,6 +1,6 @@
 "use client";
 
-import { deleteDoc, doc, setDoc, writeBatch } from "firebase/firestore";
+import { deleteDoc, doc, getDoc, setDoc, writeBatch } from "firebase/firestore";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
 import { BanqueCard } from "@/components/BanqueCard";
@@ -136,9 +136,25 @@ export default function RapprochementPage() {
       const jours = rowsToUberJours(await readSpreadsheet(f));
       if (!jours.length) throw new Error("Aucune commande reconnue. Colonnes attendues : Date de la commande (avec l'heure si possible), Ventes TTC (et Statut).");
       const batch = writeBatch(db());
-      jours.forEach((j) => batch.set(doc(db(), "restaurants", rid, "uberJours", j.date), { ...j, createdAt: Date.now() }));
+      let gardes = 0;
+      for (const j of jours) {
+        const ref = doc(db(), "restaurants", rid, "uberJours", j.date);
+        // Jour au bord de l'export : il lui manque des commandes, on ne remplace pas une journée complète déjà importée.
+        if (j.partiel) {
+          const ex = await getDoc(ref);
+          if (ex.exists() && !ex.get("partiel")) {
+            gardes++;
+            continue;
+          }
+        }
+        batch.set(ref, { ...j, createdAt: Date.now() });
+      }
       await batch.commit();
-      setInfo(`Commandes Uber Eats de ${jours.length} jour(s) importées.`);
+      setInfo(
+        `Commandes Uber Eats de ${jours.length - gardes} jour(s) importées.` +
+          (gardes ? ` ${gardes} jour(s) en bord d'export déjà complets ont été gardés.` : "") +
+          (jours.some((j) => j.partiel) ? " Le premier et le dernier jour sont marqués incomplets jusqu'à l'import de la période voisine." : ""),
+      );
     } catch (e) {
       setOpError((e as Error).message);
     } finally {
