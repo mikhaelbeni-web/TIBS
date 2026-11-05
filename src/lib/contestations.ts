@@ -29,6 +29,10 @@ export interface Contestation {
   montantRecupere?: number;
   dateVersement?: string; // versement Uber qui contient le remboursement
   note?: string;
+  origine?: "collage" | "robot";
+  contesteePar?: "robot" | "main";
+  /** Dernière tentative du robot qui a échoué (affichée sur la fiche). */
+  erreurRobot?: { message: string; le: number };
   createdAt: number;
   updatedAt?: number;
 }
@@ -48,7 +52,7 @@ export const ETATS_UBER: Record<EtatUber, string> = {
   autre: "Autre",
 };
 
-const sansAccents = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const sansAccents = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 export function etatDepuisTexte(s: string): EtatUber {
   const t = sansAccents(s);

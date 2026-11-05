@@ -12,7 +12,7 @@ on:
 jobs:
   releve:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 12
     steps:
       - name: Appeler /api/cron/mail
         env:
@@ -21,4 +21,12 @@ jobs:
           if [ -z "$CRON_SECRET" ]; then echo "Secret CRON_SECRET absent : ajoute-le dans les réglages du dépôt."; exit 1; fi
           code=$(curl -sS -o out.json -w "%{http_code}" --max-time 320 -H "Authorization: Bearer $CRON_SECRET" https://tibs.vercel.app/api/cron/mail)
           cat out.json; echo
+          test "$code" = "200"
+      - name: Appeler /api/cron/uber (robot Uber Eats, au plus toutes les 12 h par restaurant)
+        if: always()
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          code=$(curl -sS -o uber.json -w "%{http_code}" --max-time 320 -H "Authorization: Bearer $CRON_SECRET" https://tibs.vercel.app/api/cron/uber)
+          cat uber.json; echo
           test "$code" = "200"

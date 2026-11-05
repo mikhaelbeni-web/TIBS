@@ -34,7 +34,7 @@ export interface Extraction {
   diagnostic: Diagnostic;
 }
 
-type Page = import("puppeteer-core").Page;
+export type Page = import("puppeteer-core").Page;
 
 const MOIS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 
@@ -75,7 +75,7 @@ export function urlPourMois(u: string, mois: string): string | null {
   return null;
 }
 
-async function lancer() {
+export async function lancer() {
   const chromium = (await import("@sparticuz/chromium")).default;
   const puppeteer = (await import("puppeteer-core")).default;
   chromium.setGraphicsMode = false;
@@ -88,7 +88,7 @@ async function lancer() {
   });
 }
 
-async function diagnostic(page: Page, etape: string, appels: string[]): Promise<Diagnostic> {
+export async function diagnostic(page: Page, etape: string, appels: string[]): Promise<Diagnostic> {
   const texte = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
   return {
     etape,
@@ -100,7 +100,7 @@ async function diagnostic(page: Page, etape: string, appels: string[]): Promise<
 }
 
 /** Clique sur l'élément visible le plus petit dont le texte correspond. */
-async function cliquerTexte(page: Page, source: string): Promise<boolean> {
+export async function cliquerTexte(page: Page, source: string): Promise<boolean> {
   return page.evaluate((src) => {
     const re = new RegExp(src, "i");
     const candidats = [...document.querySelectorAll<HTMLElement>("a, button, [role=menuitem], [role=tab], [role=button], li, span, div, p")]
@@ -119,9 +119,9 @@ async function cliquerTexte(page: Page, source: string): Promise<boolean> {
   }, source);
 }
 
-const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function calme(page: Page) {
+export async function calme(page: Page) {
   await page.waitForNetworkIdle({ idleTime: 800, timeout: 15_000 }).catch(() => {});
 }
 

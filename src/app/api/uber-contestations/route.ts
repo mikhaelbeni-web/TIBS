@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { idContestation, nouvelleFiche, type Contestation } from "@/lib/contestations";
+import type { RestaurantId } from "@/lib/restaurants";
+import { importerLignes } from "@/lib/server/contestationsStore";
 import { adminDb } from "@/lib/server/admin";
 import { requireGerant, restaurantParam } from "@/lib/server/authz";
 
@@ -64,31 +65,9 @@ export async function POST(request: Request) {
   const body = z.object({ lignes: z.array(Ligne).min(1).max(500) }).safeParse(await request.json().catch(() => null));
   if (!body.success) return Response.json({ error: "Lignes illisibles." }, { status: 400 });
 
-  let ajoutees = 0, misesAJour = 0, inchangees = 0;
-  const maintenant = Date.now();
-  const refs = body.data.lignes.map((l) => col.doc(idContestation(l.commande, l.dateCommande)));
-  const existants = await col.firestore.getAll(...refs);
-  const batch = col.firestore.batch();
-  body.data.lignes.forEach((l, i) => {
-    const ex = existants[i];
-    if (!ex.exists) {
-      batch.set(refs[i], nouvelleFiche(l, maintenant));
-      ajoutees++;
-      return;
-    }
-    const f = ex.data() as Contestation;
-    const maj: Partial<Contestation> = {};
-    if (l.etatUber !== f.etatUber && l.etatUber !== "autre") maj.etatUber = l.etatUber;
-    // Uber affiche « Contestation refusée » : la fiche contestée passe en refusée.
-    if (l.etatUber === "contestation_refusee" && f.issue === "contestee") maj.issue = "refusee";
-    if (l.justificatif && !f.justificatif) maj.justificatif = true;
-    if (Object.keys(maj).length) {
-      batch.update(refs[i], { ...maj, updatedAt: maintenant });
-      misesAJour++;
-    } else inchangees++;
-  });
-  await batch.commit();
-  return Response.json({ ok: true, ajoutees, misesAJour, inchangees });
+  const rid = restaurantParam(request) as RestaurantId;
+  const r = await importerLignes(rid, body.data.lignes, "collage");
+  return Response.json({ ok: true, ajoutees: r.ajoutees, misesAJour: r.misesAJour, inchangees: r.inchangees });
 }
 
 export async function PATCH(request: Request) {
