@@ -21,6 +21,53 @@ export interface Diagnostic {
   titre: string;
   texte: string;
   appels: string[];
+  /** Contrôles de la connexion, sans aucune valeur saisie. */
+  connexion?: ControleConnexion;
+}
+
+export interface ControleConnexion {
+  identifiantRempli: boolean;
+  motDePasseRempli: boolean;
+  /** « e-mail » ou « identifiant », et sa longueur. */
+  identifiant: string;
+  /** Réponse de L'Addition à l'appel d'authentification. */
+  statut?: number;
+  message?: string;
+  /** Noms des champs envoyés (jamais leurs valeurs). */
+  champsEnvoyes?: string[];
+  /** Message d'erreur affiché sous le formulaire. */
+  erreurAffichee?: string;
+  essais: number;
+}
+
+/** Message lisible d'une réponse d'erreur d'authentification, sans jeton. */
+export function messageAuth(corps: string): string {
+  let texte = corps;
+  try {
+    const j = JSON.parse(corps) as Record<string, unknown> & { errors?: { message?: unknown }[] };
+    texte = [j.message, j.error, j.error_description, j.detail, j.code, j.errors?.[0]?.message]
+      .filter((v) => typeof v === "string" || typeof v === "number")
+      .join(" · ");
+  } catch {
+    if (/^\s*</.test(corps)) texte = "";
+  }
+  return texte
+    .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]*/g, "…")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+}
+
+/** Noms des champs d'un corps JSON ou formulaire, sans les valeurs. */
+export function champsDuCorps(corps: string | undefined): string[] {
+  if (!corps) return [];
+  try {
+    const j = JSON.parse(corps);
+    if (j && typeof j === "object" && !Array.isArray(j)) return Object.keys(j).slice(0, 20);
+  } catch {
+    /* formulaire */
+  }
+  return [...new URLSearchParams(corps).keys()].filter((k) => /^[\w.[\]-]{1,40}$/.test(k)).slice(0, 20);
 }
 
 export class LadditionError extends Error {
@@ -135,38 +182,131 @@ export async function calme(page: Page) {
   await page.waitForNetworkIdle({ idleTime: 800, timeout: 15_000 }).catch(() => {});
 }
 
+type Champ = import("puppeteer-core").ElementHandle<HTMLInputElement>;
+
+/** Champ identifiant : le dernier champ de saisie visible avant le mot de passe (sinon le premier visible). */
+async function champIdentifiant(pwd: Champ): Promise<Champ | null> {
+  const h = await pwd.evaluateHandle((p) => {
+    const visibles = [...document.querySelectorAll<HTMLInputElement>("input")].filter((i) => {
+      if (i === p || /^(hidden|password|checkbox|radio|submit|button|file|image|reset)$/i.test(i.type)) return false;
+      const r = i.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && getComputedStyle(i).visibility !== "hidden";
+    });
+    const avant = visibles.filter((i) => i.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING);
+    return avant[avant.length - 1] ?? visibles[0] ?? null;
+  });
+  const el = h.asElement() as Champ | null;
+  if (!el) await h.dispose();
+  return el;
+}
+
+/** Tape la valeur puis vérifie qu'elle est bien dans le champ (sans jamais la relire côté serveur). */
+async function remplir(champ: Champ, valeur: string): Promise<boolean> {
+  await champ.click({ count: 3 });
+  await champ.evaluate((i) => i.select());
+  await champ.type(valeur, { delay: 25 });
+  if (await champ.evaluate((i, v) => i.value === v, valeur)) return true;
+  // Champ contrôlé (React) qui a perdu des touches : valeur posée par le setter natif, puis événements.
+  await champ.evaluate((i, v) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(i, v);
+    i.dispatchEvent(new Event("input", { bubbles: true }));
+    i.dispatchEvent(new Event("change", { bubbles: true }));
+  }, valeur);
+  return champ.evaluate((i, v) => i.value === v, valeur);
+}
+
+/**
+ * Variantes à essayer, dans l'ordre : telles qu'enregistrées, puis sans espace autour du mot de passe
+ * et e-mail en minuscules (claviers de téléphone). Au plus 3 essais pour ne pas bloquer le compte.
+ */
+export function variantesConnexion(identifiant: string, motDePasse: string): { identifiant: string; motDePasse: string }[] {
+  const id = identifiant.trim();
+  const ids = [id, ...(id.includes("@") ? [id.toLowerCase()] : [])];
+  const mdps = [motDePasse, motDePasse.trim()];
+  const vues = new Set<string>();
+  const out: { identifiant: string; motDePasse: string }[] = [];
+  for (const [i, m] of [
+    [ids[0], mdps[0]],
+    [ids[0], mdps[1]],
+    [ids[ids.length - 1], mdps[1]],
+  ]) {
+    const cle = JSON.stringify([i, m]);
+    if (!i || !m || vues.has(cle)) continue;
+    vues.add(cle);
+    out.push({ identifiant: i, motDePasse: m });
+  }
+  return out;
+}
+
+const APPEL_AUTH = /\/api\/auth|\/login|\/signin|\/token|\/session/i;
+
 async function connexion(page: Page, identifiant: string, motDePasse: string, appels: string[]) {
+  // Chrome sans écran s'annonce « HeadlessChrome » : certains sites refusent ces navigateurs.
+  await page.setUserAgent({ userAgent: (await page.browser().userAgent()).replace(/Headless/g, "") });
   await page.goto(LADDITION_URL, { waitUntil: "networkidle2", timeout: 30_000 });
-  const pwd = await page.waitForSelector("input[type=password]", { visible: true, timeout: 20_000 }).catch(() => null);
-  if (!pwd) {
-    // Déjà connecté (peu probable sans cookies) ou page de connexion inconnue.
-    if (/login|connexion|signin/i.test(page.url())) throw new LadditionError("Page de connexion de L'Addition non reconnue.", await diagnostic(page, "connexion", appels));
-    return;
-  }
-  const user = await page.$(
-    [
-      "input[type=email]",
-      "input[autocomplete=username]",
-      "input[name*=mail i]",
-      "input[name*=user i]",
-      "input[name*=login i]",
-      "input[id*=mail i]",
-      "input[id*=user i]",
-      "input[type=text]",
-    ].join(", "),
-  );
-  if (!user) throw new LadditionError("Champ identifiant introuvable sur la page de connexion.", await diagnostic(page, "connexion", appels));
-  await user.click({ count: 3 });
-  await user.type(identifiant, { delay: 20 });
-  await pwd.click({ count: 3 });
-  await pwd.type(motDePasse, { delay: 20 });
-  await Promise.all([page.waitForNavigation({ timeout: 20_000 }).catch(() => {}), pwd.press("Enter")]);
-  await calme(page);
-  const encore = await page.$("input[type=password]");
-  if (encore && (await encore.isVisible())) {
+  const id = identifiant.trim();
+  const controle: ControleConnexion = {
+    identifiantRempli: false,
+    motDePasseRempli: false,
+    identifiant: `${id.includes("@") ? "e-mail" : "identifiant"}, ${id.length} caractères`,
+    essais: 0,
+  };
+  const echec = async (message: string) => {
     const d = await diagnostic(page, "connexion", appels);
-    throw new LadditionError("L'Addition a refusé la connexion : vérifie l'identifiant et le mot de passe dans Réglages.", d);
+    throw new LadditionError(message, { ...d, connexion: controle });
+  };
+
+  for (const v of variantesConnexion(identifiant, motDePasse)) {
+    const pwd = (await page.waitForSelector("input[type=password]", { visible: true, timeout: 20_000 }).catch(() => null)) as Champ | null;
+    if (!pwd) {
+      if (controle.essais > 0) return; // le formulaire a disparu : connecté
+      // Déjà connecté (peu probable sans cookies) ou page de connexion inconnue.
+      if (/login|connexion|signin|auth\./i.test(page.url())) await echec("Page de connexion de L'Addition non reconnue.");
+      return;
+    }
+    const user = await champIdentifiant(pwd);
+    if (!user) return echec("Champ identifiant introuvable sur la page de connexion.");
+    controle.essais++;
+    controle.identifiantRempli = await remplir(user, v.identifiant);
+    controle.motDePasseRempli = await remplir(pwd, v.motDePasse);
+    if (!controle.identifiantRempli || !controle.motDePasseRempli) return echec("Le robot n'arrive pas à remplir le formulaire de connexion de L'Addition.");
+
+    const reponse = page.waitForResponse((r) => r.request().method() === "POST" && APPEL_AUTH.test(r.url()), { timeout: 20_000 }).catch(() => null);
+    const navigation = page.waitForNavigation({ timeout: 20_000 }).catch(() => {});
+    await pwd.press("Enter");
+    const r = await reponse;
+    if (r) {
+      controle.statut = r.status();
+      controle.champsEnvoyes = champsDuCorps(r.request().postData());
+      controle.message = r.ok() ? undefined : messageAuth(await r.text().catch(() => "")) || undefined;
+    }
+    if (!r || r.ok()) await navigation;
+    await calme(page);
+    const encore = await page.$("input[type=password]");
+    if (!encore || !(await encore.isVisible())) return;
+    controle.erreurAffichee =
+      (await page
+        .evaluate(() =>
+          [...document.querySelectorAll<HTMLElement>("[role=alert], .Mui-error, .MuiFormHelperText-root, .MuiAlert-message, [class*=error i], [class*=alert i], [class*=toast i]")]
+            .map((e) => e.innerText.trim())
+            .filter(Boolean)
+            .join(" · ")
+            .slice(0, 200),
+        )
+        .catch(() => "")) || undefined;
+    // 401/403 : identifiants refusés, on tente la variante suivante ; autre erreur : inutile d'insister.
+    if (r && r.status() !== 401 && r.status() !== 403) break;
   }
+
+  const raison = controle.message || controle.erreurAffichee;
+  // Formulaire toujours affiché après envoi : refus (401/403, ou pas d'appel d'authentification repéré).
+  if (controle.statut === undefined || controle.statut === 401 || controle.statut === 403) {
+    return echec(
+      `L'Addition refuse l'identifiant ou le mot de passe enregistrés dans Réglages${raison ? ` (« ${raison} »)` : ""}. ` +
+        "Connecte-toi toi-même sur auth.laddition.com avec exactement les mêmes, puis ressaisis-les dans Réglages.",
+    );
+  }
+  return echec(`La connexion à L'Addition n'a pas abouti${controle.statut ? ` (réponse ${controle.statut})` : ""}${raison ? ` : ${raison}` : ""}.`);
 }
 
 /**
