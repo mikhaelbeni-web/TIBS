@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useAuth } from "@/components/AuthProvider";
 import { Card, PageHeader } from "@/components/ui";
 import { checkDpae } from "@/lib/dpae";
 import { formatEuros } from "@/lib/money";
@@ -16,6 +17,23 @@ import { useCollection } from "@/lib/useCollection";
 
 export default function Dashboard() {
   const { rid } = useRestaurant();
+  const { user } = useAuth();
+  const [uber, setUber] = useState<{ aContester: number; enAttente: number } | null>(null);
+  useEffect(() => {
+    if (!user) return;
+    let actif = true;
+    user
+      .getIdToken()
+      .then((t) => fetch(`/api/uber-contestations?r=${rid}`, { headers: { authorization: `Bearer ${t}` } }))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { fiches: { issue: string }[] } | null) => {
+        if (actif && d) setUber({ aContester: d.fiches.filter((f) => f.issue === "a_contester").length, enAttente: d.fiches.filter((f) => f.issue === "contestee").length });
+      })
+      .catch(() => {});
+    return () => {
+      actif = false;
+    };
+  }, [user, rid]);
   const employees = useCollection<Employee>("employees", "dateEmbauche", true);
   const invoices = useCollection<Invoice>("invoices", "dateFacture", true);
   const cash = useCollection<CashEntry>("cashEntries", "date", true);
@@ -61,6 +79,13 @@ export default function Dashboard() {
       value: formatEuros(monthCash.reduce((s, c) => s + c.cb + c.especes + c.ticketsResto + c.autres, 0)),
       sub: `${monthCash.length} journée(s) saisie(s)`,
       alert: false,
+    },
+    {
+      href: "/contestations",
+      title: "Contestations Uber",
+      value: uber ? String(uber.aContester) : "…",
+      sub: uber ? `à contester · ${uber.enAttente} en attente d'Uber` : "Chargement",
+      alert: (uber?.aContester ?? 0) > 0,
     },
     {
       href: "/tva",
