@@ -12,6 +12,7 @@ import { db } from "@/lib/firebase";
 import type { InboxDoc, InboxItem } from "@/lib/ingest";
 import { formatEuros, toCents } from "@/lib/money";
 import { parseReglages } from "@/lib/reglages";
+import { DOUTE_TEXTE } from "@/lib/autoValidation";
 import { useCollection } from "@/lib/useCollection";
 
 const fr = (iso?: string) => (iso ? iso.split("-").reverse().join("/") : "");
@@ -133,6 +134,10 @@ function texteRelu(r: any, bouton = false) {
   return `PDF lus par l'IA : ${r.relus}, dont ${r.completes} rempli(s).${r.restants ? ` Encore ${r.restants} à compléter.` : ""}${limite}${cout}`;
 }
 
+function texteAuto(a: { valides: number }) {
+  return `${a.valides} facture(s) validée(s) automatiquement (lecture cohérente), rangée(s) dans Factures.`;
+}
+
 const RAISON_LECTURE: Record<string, string> = {
   limite: "PDF pas encore lu : la limite de PDF par relevé était atteinte. Touche « Lire ce PDF avec l'IA ».",
   budget: "PDF pas lu : le budget IA du mois est atteint (voir Réglages).",
@@ -173,8 +178,8 @@ function MailCard({ du, au }: { du: string; au: string }) {
         return;
       }
       if (kind === "lire") {
-        const { relu } = await api(user, `/api/gmail/sync?r=${rid}&mode=lire`);
-        setInfo(relu.status === "ok" ? texteRelu(relu, true) : relu.message);
+        const { relu, auto } = await api(user, `/api/gmail/sync?r=${rid}&mode=lire`);
+        setInfo(relu.status === "ok" ? `${texteRelu(relu, true)}${auto?.valides ? ` ${texteAuto(auto)}` : ""}` : relu.message);
         return;
       }
       if (kind === "sync" && Boolean(du) !== Boolean(au)) throw new Error("Choisis la date de début et la date de fin, ou touche « Toutes les dates ».");
@@ -188,6 +193,7 @@ function MailCard({ du, au }: { du: string; au: string }) {
             : r.message,
         );
         if (r.relu?.status === "ok" && r.relu.relus) setInfo((i) => `${i ?? ""} ${texteRelu(r.relu)}`.trim());
+        if (r.auto?.valides) setInfo((i) => `${i ?? ""} ${texteAuto(r.auto)}`.trim());
       }
     } catch (e) {
       setError((e as Error).message);
@@ -409,6 +415,16 @@ function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mai
             )}
           </div>
         )}
+        {facture && d.doutes && d.doutes.length > 0 && (
+          <div className="rounded-control bg-warning-soft p-3 text-sm">
+            <p className="font-medium">Pas validée automatiquement :</p>
+            <ul className="mt-1 list-disc pl-5">
+              {d.doutes.map((x) => (
+                <li key={x}>{DOUTE_TEXTE[x] ?? x}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {facture ? (
           <>
             <Field label="Fournisseur"><Input value={f.fournisseur} onChange={set("fournisseur")} /></Field>
@@ -509,6 +525,73 @@ function Ignores({ items, mailbox, onTraiter }: { items: (InboxDoc & { id: strin
   );
 }
 
+/** Factures validées toutes seules : visibles ici, avec un bouton pour annuler si l'IA s'est trompée. */
+function AutoValidees({ items }: { items: (InboxDoc & { id: string })[] }) {
+  const { rid } = useRestaurant();
+  const { user } = useAuth();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (!items.length) return null;
+
+  async function annuler(id: string) {
+    if (!user) return;
+    if (!confirm("Retirer cette facture de Factures et la remettre à vérifier ?")) return;
+    setBusy(id);
+    setError(null);
+    try {
+      await api(user, `/api/inbox/restaurer?r=${rid}&i=${encodeURIComponent(id)}`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const tries = [...items].sort((a, b) => (b.traiteLe ?? 0) - (a.traiteLe ?? 0)).slice(0, 50);
+  return (
+    <details className="group mt-8 border-t border-border pt-3">
+      <summary className="mx-auto flex min-h-11 w-fit cursor-pointer list-none items-center rounded-control [&::-webkit-details-marker]:hidden px-3 text-sm text-muted underline underline-offset-4">
+        <span className="group-open:hidden">Validées automatiquement ({items.length})</span>
+        <span className="hidden group-open:inline">Masquer les factures validées automatiquement</span>
+      </summary>
+      <p className="mt-2 text-xs text-muted">
+        Lecture cohérente (fournisseur connu, numéro, date, HT + TVA = TTC, pas de doublon) : rangées dans Factures sans clic. Une erreur ? Remets-la à vérifier.
+      </p>
+      <ErrorBox message={error} />
+      <ul className="mt-2 space-y-2">
+        {tries.map((d) =>
+          d.item.kind === "facture" ? (
+            <li key={d.id}>
+              <Card className="space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold">{d.item.fournisseur}</div>
+                    <div className="truncate text-xs text-muted">
+                      {[d.item.numero && `N° ${d.item.numero}`, fr(d.item.dateFacture)].filter(Boolean).join(" · ")}
+                      {d.traiteLe ? ` · validée le ${new Date(d.traiteLe).toLocaleDateString("fr-FR")}` : ""}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="font-semibold tabular-nums">{amountOf(d.item)}</div>
+                    <Badge tone="green">Validée</Badge>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  {d.item.source.attachment && <PdfApercu requete={`i=${encodeURIComponent(d.id)}`} nom="la facture" />}
+                  <Button variant="secondary" className="ml-auto min-h-11 text-sm" disabled={busy !== null} onClick={() => annuler(d.id)}>
+                    {busy === d.id ? "…" : "Remettre à vérifier"}
+                  </Button>
+                </div>
+              </Card>
+            </li>
+          ) : null,
+        )}
+      </ul>
+      {items.length > tries.length && <p className="mt-2 text-xs text-muted">Seules les 50 dernières sont affichées.</p>}
+    </details>
+  );
+}
+
 /** Éléments reçus par mail (factures fournisseurs, versements Uber) en attente de validation. */
 function AVerifier() {
   const { rid } = useRestaurant();
@@ -529,6 +612,7 @@ function AVerifier() {
   const jours = todo.map(jourRecu).filter(Boolean).sort();
   const horsPeriode = enAttente.length - todo.length;
   const ignores = useMemo(() => inbox.items.filter((i) => i.statut === "rejete"), [inbox.items]);
+  const autos = useMemo(() => inbox.items.filter((i) => i.statut === "valide" && i.auto && i.item.kind === "facture"), [inbox.items]);
   const current = inbox.items.find((i) => i.id === open && (i.statut === "a_verifier" || i.statut === "rejete"));
   const close = useCallback(() => setOpen(null), []);
 
@@ -551,7 +635,9 @@ function AVerifier() {
         )}
         {horsPeriode > 0 && <div className="text-muted">{horsPeriode} autre(s) en attente hors de cette période.</div>}
       </div>
-      <p className="mb-4 text-sm text-muted">Touche un élément pour le vérifier : une fois validé, il passe dans Factures ou Caisse &gt; Uber.</p>
+      <p className="mb-4 text-sm text-muted">
+        Les factures lues sans doute sont validées toutes seules (liste en bas de page). Restent ici celles où l&apos;IA a un doute, avec la raison : touche un élément pour le vérifier.
+      </p>
       <ErrorBox message={inbox.error} />
       {inbox.loading ? (
         <p className="text-muted">Chargement…</p>
@@ -573,6 +659,12 @@ function AVerifier() {
                     <div className="truncate text-xs text-muted">
                       <span className="font-medium text-ink">Reçu le {fr(jourRecu(d as InboxDoc)) || "?"}</span> · {d.item.source.subject}
                     </div>
+                    {d.doutes?.[0] && (
+                      <div className="mt-1 text-xs text-warning">
+                        {DOUTE_TEXTE[d.doutes[0]] ?? d.doutes[0]}
+                        {d.doutes.length > 1 ? ` (+${d.doutes.length - 1})` : ""}
+                      </div>
+                    )}
                     <Boite boite={d.item.source.boite} adresse={d.item.source.boite === rid ? mailbox : undefined} className="mt-1" />
                   </div>
                   <div className="shrink-0 text-right">
@@ -585,6 +677,7 @@ function AVerifier() {
           ))}
         </ul>
       )}
+      <AutoValidees items={autos} />
       <Ignores items={ignores} mailbox={mailbox} onTraiter={setOpen} />
       {current && <ReviewSheet key={`${current.id}-${current.relu ?? 0}`} id={current.id} d={current} mailbox={mailbox} onClose={close} />}
     </div>

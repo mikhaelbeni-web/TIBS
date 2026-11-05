@@ -75,8 +75,44 @@ function montantPour(lignes: string[][], libelle: RegExp): number | null {
   return null;
 }
 
+/**
+ * Tableau « CA/TVA par famille » de L'Addition (reporting-pos, /vat-family) : colonnes CA TTC, CA HT*, TVA,
+ * Remises, Offerts, CA TTC Brut ; une ligne Total, puis par famille des sous-lignes par taux (« 10% », « 5.5% »…).
+ * Montants à point décimal, sans espace ni €. CA TTC = premier montant après le libellé.
+ * Renvoie null si le texte ne ressemble pas à ce tableau.
+ */
+export function extraireTableauTva(texte: string): Record<keyof ChiffresCa, number | null> | null {
+  const debut = texte.search(/CA\s*TTC/i);
+  if (debut < 0) return null;
+  const tokens = texte.slice(debut).split(/\s+/).filter(Boolean);
+  const nombre = /^-?\d+(?:[.,]\d+)?$/;
+  let attente: "total" | number | null = null;
+  let total: number | null = null;
+  const parTaux = new Map<number, number>();
+  for (const t of tokens) {
+    if (/^total$/i.test(t)) {
+      attente = total === null ? "total" : null;
+      continue;
+    }
+    const taux = t.match(/^(\d+(?:[.,]\d+)?)%$/);
+    if (taux) {
+      attente = Number(taux[1].replace(",", "."));
+      continue;
+    }
+    if (attente === null || !nombre.test(t)) continue;
+    const cents = Math.round(Number(t.replace(",", ".")) * 100);
+    if (attente === "total") total = cents;
+    else parTaux.set(attente, (parTaux.get(attente) ?? 0) + cents);
+    attente = null;
+  }
+  if (total === null || parTaux.size === 0) return null;
+  return { caTtcNet: total, ttc10: parTaux.get(10) ?? 0, ttc20: parTaux.get(20) ?? 0, ttc55: parTaux.get(5.5) ?? 0 };
+}
+
 /** Extrait les quatre chiffres du texte de la page L'Addition. Les absents valent null. */
 export function extraireChiffres(texte: string): Record<keyof ChiffresCa, number | null> {
+  const tableau = extraireTableauTva(texte);
+  if (tableau) return tableau;
   const lignes = texte
     .split(/\r?\n/)
     .map((l) => l.split("\t").map((c) => c.trim()))

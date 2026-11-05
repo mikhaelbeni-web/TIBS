@@ -1,10 +1,11 @@
 import { toCents, toIsoDate } from "./money";
 import { isRestaurantId, type RestaurantId } from "./restaurants";
+import type { Doute } from "./autoValidation";
 
 /**
  * Charge utile envoyée par la tâche quotidienne qui lit la boîte mail du restaurant.
- * Chaque élément arrive dans la collection `inbox` avec le statut « a_verifier » :
- * rien n'est enregistré comme facture ou versement tant que le gérant n'a pas validé.
+ * Chaque élément arrive dans la collection `inbox` avec le statut « a_verifier ». Les factures dont la
+ * lecture est cohérente et les récaps Uber complets sont ensuite validés tout seuls ; le reste attend le gérant.
  */
 export type InboxKind = "facture" | "uber";
 
@@ -34,6 +35,8 @@ export interface InboxFacture {
   montantTVA?: number;
   montantTTC?: number;
   etablissement?: "19e" | "17e";
+  /** Restaurant facturé d'après l'adresse client lue sur le PDF par l'IA. */
+  etablissementPdf?: "19e" | "17e";
   incomplet?: boolean;
   lecture?: Lecture;
   lectureErreur?: string;
@@ -68,7 +71,11 @@ export interface InboxDoc {
   receivedAt: number;
   traiteLe?: number;
   relu?: number; // dernière relecture du PDF par l'IA
-  auto?: boolean; // enregistré sans validation manuelle (récap Uber complet et cohérent)
+  auto?: boolean; // enregistré sans validation manuelle (récap Uber complet et cohérent, ou facture lue sans doute)
+  factureId?: string; // facture créée par la validation automatique
+  /** Raisons pour lesquelles la facture n'a pas été validée toute seule (voir lib/autoValidation). */
+  doutes?: Doute[];
+  remiseAVerifier?: boolean; // le gérant a annulé une validation automatique : plus jamais validée seule
 }
 
 /**
