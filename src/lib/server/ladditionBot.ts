@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { bornesMois, extraireChiffres, type ChiffresCa } from "@/lib/laddition";
-import { chiffresDuMois, lignesXlsx, lireExportServices, periodeDuNom, problemeExport } from "@/lib/ladditionExport";
+import { chiffresDuMois, lignesXlsx, lireExportServices, periodeDuNom, problemeExport, type ServiceExport } from "@/lib/ladditionExport";
 
 /**
  * Robot qui ouvre L'Addition (reporting.laddition.com) dans un Chromium sans écran,
@@ -39,6 +39,8 @@ export interface Extraction {
   methode: "export" | "page";
   /** Pourquoi l'export n'a pas servi, le cas échéant. */
   noteExport?: string;
+  /** Services lus dans l'export (CB, espèces, Uber, lien du ticket Z), même si le mois n'est pas complet. */
+  services?: ServiceExport[];
   diagnostic: Diagnostic;
 }
 
@@ -238,7 +240,7 @@ async function choisirMois(page: Page, mois: string, strict = false): Promise<bo
  * Le fichier donne exactement les chiffres de Comptabilité CA/TVA (vérifié sur octobre 2026). Sa période
  * (dans son nom, sinon les dates affichées sur la page) prouve que c'est bien le mois complet.
  */
-async function parExport(page: Page, mois: string): Promise<{ chiffres: ChiffresCa } | { note: string }> {
+async function parExport(page: Page, mois: string): Promise<{ chiffres: ChiffresCa; services: ServiceExport[] } | { note: string; services?: ServiceExport[] }> {
   await page.goto(new URL("v2/shift-details", LADDITION_URL).toString(), { waitUntil: "networkidle2", timeout: 30_000 });
   await calme(page);
   const moisChoisi = await choisirMois(page, mois, true);
@@ -283,7 +285,7 @@ async function parExport(page: Page, mois: string): Promise<{ chiffres: Chiffres
     const periode = periodeDuNom(fichier.nom) ?? (moisChoisi ? bornesMois(mois) : null);
     const r = chiffresDuMois(exp, mois, periode);
     const pb = problemeExport(r, mois, periode) ?? (r.complet === null ? `période du fichier « ${fichier.nom} » inconnue` : null);
-    return pb ? { note: pb } : { chiffres: r.chiffres };
+    return pb ? { note: pb, services: exp.services } : { chiffres: r.chiffres, services: exp.services };
   } catch (e) {
     return { note: (e as Error).message };
   } finally {
@@ -292,7 +294,14 @@ async function parExport(page: Page, mois: string): Promise<{ chiffres: Chiffres
   }
 }
 
-export async function extraireMois(opts: { identifiant: string; motDePasse: string; etablissement?: string; mois: string }): Promise<Extraction> {
+export async function extraireMois(opts: {
+  identifiant: string;
+  motDePasse: string;
+  etablissement?: string;
+  mois: string;
+  /** Ne veut que les services de l'export (pas de repli sur la page CA/TVA). */
+  servicesSeulement?: boolean;
+}): Promise<Extraction> {
   const browser = await lancer();
   const appels: string[] = [];
   try {
@@ -311,9 +320,14 @@ export async function extraireMois(opts: { identifiant: string; motDePasse: stri
       await calme(page);
     }
 
-    const exp = await parExport(page, opts.mois).catch((e: Error) => ({ note: e.message }));
-    if ("chiffres" in exp) {
-      return { chiffres: exp.chiffres, periodeConfirmee: true, methode: "export", diagnostic: await diagnostic(page, "export", appels) };
+    const exp: { chiffres?: ChiffresCa; note?: string; services?: ServiceExport[] } = await parExport(page, opts.mois).catch((e: Error) => ({ note: e.message }));
+    if (exp.chiffres) {
+      return { chiffres: exp.chiffres, periodeConfirmee: true, methode: "export", services: exp.services, diagnostic: await diagnostic(page, "export", appels) };
+    }
+    // Mois en cours : l'export est partiel (pas de chiffres du mois) mais ses services servent au pointage jour à jour.
+    if (opts.servicesSeulement) {
+      if (exp.services) return { chiffres: { caTtcNet: null, ttc10: null, ttc20: null, ttc55: null }, periodeConfirmee: false, methode: "export", noteExport: exp.note, services: exp.services, diagnostic: await diagnostic(page, "export", appels) };
+      throw new LadditionError(`Export « Détails par service » : ${exp.note ?? "échec"}.`, await diagnostic(page, "export", appels));
     }
 
     // Repli : Comptabilité > Comptabilité CA/TVA, lecture du texte de la page.
@@ -331,6 +345,7 @@ export async function extraireMois(opts: { identifiant: string; motDePasse: stri
       periodeConfirmee,
       methode: "page",
       noteExport: exp.note,
+      services: exp.services,
       diagnostic: await diagnostic(page, "lecture", appels),
     };
   } catch (e) {

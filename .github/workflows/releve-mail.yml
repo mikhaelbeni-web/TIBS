@@ -12,7 +12,7 @@ on:
 jobs:
   releve:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - name: Appeler /api/cron/mail
         env:
@@ -29,4 +29,12 @@ jobs:
         run: |
           code=$(curl -sS -o uber.json -w "%{http_code}" --max-time 320 -H "Authorization: Bearer $CRON_SECRET" https://tibs.vercel.app/api/cron/uber)
           cat uber.json; echo
+          test "$code" = "200"
+      - name: Appeler /api/cron/laddition (journées et tickets Z de L'Addition, une fois par jour après 6 h)
+        if: always()
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          code=$(curl -sS -o laddition.json -w "%{http_code}" --max-time 320 -H "Authorization: Bearer $CRON_SECRET" https://tibs.vercel.app/api/cron/laddition)
+          cat laddition.json; echo
           test "$code" = "200"
