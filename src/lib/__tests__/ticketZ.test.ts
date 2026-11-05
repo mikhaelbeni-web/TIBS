@@ -79,3 +79,23 @@ describe("ticket Z", () => {
     ]);
   });
 });
+
+import { comparerUberBanque, pire } from "../ticketZ";
+
+describe("triangulation Uber", () => {
+  const v = { id: "v", date: "2026-11-09", montant: 52000, brut: 70000 };
+  it("net du mail retrouvé en banque", () => {
+    const r = comparerUberBanque(v, [{ id: "b", date: "2026-11-10", amount: 52000, libelle: "VIR UBER EATS" }], { today: "2026-11-20" });
+    expect(r).toMatchObject({ statut: "ok", virement: { jours: 1 } });
+  });
+  it("montant différent en banque → écart une fois le délai passé", () => {
+    const b = [{ id: "b", date: "2026-11-10", amount: 51000, libelle: "VIR UBER EATS" }];
+    expect(comparerUberBanque(v, b, { today: "2026-11-11" }).statut).toBe("attente");
+    expect(comparerUberBanque(v, b, { today: "2026-11-20" }).statut).toBe("ecart");
+  });
+  it("le pire statut l'emporte", () => {
+    expect(pire("ok", "attente")).toBe("attente");
+    expect(pire("ok", "ecart", "attente")).toBe("ecart");
+    expect(pire("ok", "ok")).toBe("ok");
+  });
+});

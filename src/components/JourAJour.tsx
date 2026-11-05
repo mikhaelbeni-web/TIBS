@@ -7,7 +7,7 @@ import { Badge, Button, Card, Empty, ErrorBox, Field, Input } from "@/components
 import { isCashDeposit, isUber } from "@/lib/cashImport";
 import { formatEuros } from "@/lib/money";
 import type { BankLine, CashLine } from "@/lib/reconcile";
-import { comparerCB, comparerUber, comparerUberJour, controleTotal, type Statut, type TicketZ } from "@/lib/ticketZ";
+import { comparerCB, comparerUber, comparerUberBanque, comparerUberJour, pire, controleTotal, type Statut, type TicketZ } from "@/lib/ticketZ";
 import type { BankTransaction, CashEntry, UberJourDoc, UberPayout, WithId } from "@/lib/types";
 
 const fr = (iso: string) => iso.split("-").reverse().join("/");
@@ -111,6 +111,10 @@ export function JourAJour({
   );
   const ubersCaisse: CashLine[] = cash.filter((c) => c.uber !== undefined).map((c) => ({ id: c.id, date: c.date, amount: c.uber ?? 0 }));
   const uberSemaine = comparerUber(jour, ubersCaisse, uber);
+  const uberBanque = comparerUberBanque(
+    uberSemaine.versement,
+    credits.filter((b) => isUber(b.libelle)),
+  );
   const total = ticket ? controleTotal(ticket) : null;
 
   async function deposer(f?: File) {
@@ -239,19 +243,34 @@ export function JourAJour({
             )}
           </Bloc>
 
-          <Bloc titre="Uber de la semaine ↔ versement" statut={uberSemaine.statut}>
-            <Ligne label={`Z du ${fr(uberSemaine.semaine.debut)} au ${fr(uberSemaine.semaine.fin)}`}>
+          <Bloc titre="Uber de la semaine : L'Addition ↔ mail Uber ↔ banque" statut={uberSemaine.versement ? pire(uberSemaine.statut, uberBanque.statut) : uberSemaine.statut}>
+            <Ligne label={`L'Addition, Z du ${fr(uberSemaine.semaine.debut)} au ${fr(uberSemaine.semaine.fin)}`}>
               {formatEuros(uberSemaine.caisseSemaine)} ({uberSemaine.joursSaisis}/7 j)
             </Ligne>
             {uberSemaine.versement ? (
               <>
-                <Ligne label={`Versement du ${fr(uberSemaine.versement.date)} · ventes`}>
+                <Ligne label={`Mail Uber du ${fr(uberSemaine.versement.date)} · ventes`}>
                   {uberSemaine.versement.brut !== undefined ? formatEuros(uberSemaine.versement.brut) : "non indiquées"}
                 </Ligne>
-                <Ligne label="Net versé">{formatEuros(uberSemaine.versement.montant)}</Ligne>
+                {uberSemaine.ecart !== undefined && uberSemaine.ecart !== 0 && (
+                  <p className={`text-xs ${uberSemaine.statut === "ecart" ? "text-danger" : "text-muted"}`}>
+                    Écart ventes Uber − L&apos;Addition : {formatEuros(uberSemaine.ecart)}
+                    {uberSemaine.joursSaisis < 7 ? ` (il manque ${7 - uberSemaine.joursSaisis} ticket(s) Z cette semaine)` : ""}
+                  </p>
+                )}
+                <Ligne label="Mail Uber · net versé">{formatEuros(uberSemaine.versement.montant)}</Ligne>
+                {uberBanque.virement ? (
+                  <Ligne label={`Banque le ${fr(uberBanque.virement.date)}`}>{formatEuros(uberBanque.virement.amount)}</Ligne>
+                ) : (
+                  <p className={`text-xs ${uberBanque.statut === "ecart" ? "text-danger" : "text-muted"}`}>
+                    {uberBanque.statut === "ecart"
+                      ? "Aucun virement UBER de ce montant en banque."
+                      : "Virement pas encore arrivé ou relevé pas encore importé."}
+                  </p>
+                )}
               </>
             ) : (
-              <p className="text-sm text-muted">Versement de cette semaine pas encore reçu (récap Uber du lundi).</p>
+              <p className="text-sm text-muted">Mail de versement Uber de cette semaine pas encore reçu (récap du lundi, validé dans « À vérifier »).</p>
             )}
           </Bloc>
 
