@@ -117,9 +117,13 @@ export interface BankTransaction {
   date: string; // AAAA-MM-JJ
   libelle: string;
   montant: number; // centimes, positif = crédit
-  details?: string; // informations complémentaires de la banque
-  type?: string; // type d'opération donné par la banque
-  importId: string;
+  details?: string; // informations complémentaires de la banque (import de fichier)
+  type?: string; // type d'opération donné par la banque (import de fichier)
+  importId: string; // "banque" pour le relevé automatique
+  /** "banque" = relevé automatique DSP2 ; absent = import de fichier. */
+  source?: "banque";
+  compte?: string;
+  ref?: string;
   createdAt: number;
 }
 

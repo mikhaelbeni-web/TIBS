@@ -79,7 +79,8 @@ export function totaux(paiements: LignePaiement[]): Totaux {
   return t;
 }
 
-export type Statut = "ok" | "ecart" | "attente" | "absent";
+/** proche : petit écart explicable (commandes Uber entre minuit et la fermeture, comptées dans une autre semaine). */
+export type Statut = "ok" | "proche" | "ecart" | "attente" | "absent";
 
 export interface ComparaisonCB {
   statut: Statut;
@@ -141,6 +142,9 @@ export interface VersementUber {
   brut?: number;
   frais?: number;
   reference?: string;
+  /** Période couverte par le récap Uber (mail du lundi), si connue. */
+  debut?: string;
+  fin?: string;
 }
 
 export interface ComparaisonUber {
@@ -163,14 +167,17 @@ export function comparerUber(
   jour: string,
   ubersCaisse: CashLine[],
   versements: VersementUber[],
-  { today = new Date().toISOString().slice(0, 10), tolerance = 100 } = {},
+  { today = new Date().toISOString().slice(0, 10), tolerance = 100, tauxProche = 0.03 } = {},
 ): ComparaisonUber {
-  const semaine = semaineUber(jour);
+  // Le récap Uber donne sa période : on prend celle qui contient le jour, sinon la semaine lundi → dimanche.
+  const parPeriode = versements.find((v) => v.debut && v.fin && v.debut <= jour && jour <= v.fin);
+  const semaine = parPeriode ? { debut: parPeriode.debut!, fin: parPeriode.fin! } : semaineUber(jour);
   const dansSemaine = ubersCaisse.filter((c) => c.date >= semaine.debut && c.date <= semaine.fin);
   const caisseSemaine = dansSemaine.reduce((s, c) => s + c.amount, 0);
   const caisseJour = ubersCaisse.find((c) => c.date === jour)?.amount ?? 0;
   // Versement de cette semaine : versé dans les 10 jours qui suivent le dimanche.
-  const versement = versements
+  const versement = parPeriode ?? versements
+    .filter((v) => !v.debut || !v.fin)
     .filter((v) => {
       const d = daysBetween(semaine.fin, v.date);
       return d >= 0 && d <= 10;
@@ -182,7 +189,17 @@ export function comparerUber(
   }
   if (versement.brut === undefined) return { ...base, versement, statut: "attente" };
   const ecart = versement.brut - caisseSemaine;
-  return { ...base, versement, ecart, statut: Math.abs(ecart) <= tolerance && dansSemaine.length === 7 ? "ok" : "ecart" };
+  const complet = dansSemaine.length === 7;
+  // Uber coupe sa semaine à lundi 00:00 alors que le Z du dimanche garde les commandes jusqu'à la
+  // fermeture (~1 h) : quelques commandes changent de semaine, d'où un petit écart attendu.
+  const statut: Statut = !complet
+    ? "ecart"
+    : Math.abs(ecart) <= tolerance
+      ? "ok"
+      : Math.abs(ecart) <= Math.max(tolerance, caisseSemaine * tauxProche)
+        ? "proche"
+        : "ecart";
+  return { ...base, versement, ecart, statut };
 }
 
 export interface ComparaisonUberBanque {
@@ -210,7 +227,7 @@ export function comparerUberBanque(
 
 /** Le pire statut l'emporte (un seul écart suffit à alerter). */
 export function pire(...s: Statut[]): Statut {
-  for (const x of ["ecart", "attente", "absent", "ok"] as Statut[]) if (s.includes(x)) return x;
+  for (const x of ["ecart", "proche", "attente", "absent", "ok"] as Statut[]) if (s.includes(x)) return x;
   return "absent";
 }
 

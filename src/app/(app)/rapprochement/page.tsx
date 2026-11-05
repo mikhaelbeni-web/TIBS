@@ -3,11 +3,13 @@
 import { deleteDoc, doc, setDoc, writeBatch } from "firebase/firestore";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
+import { BanqueCard } from "@/components/BanqueCard";
 import { JourAJour } from "@/components/JourAJour";
 import { bankDocId, isCashDeposit, isUber, rowToUber, rowsToCash, rowsToUberJours } from "@/lib/cashImport";
 import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import { readSpreadsheet, rowToBank } from "@/lib/importer";
+import { sansDoublonsImport } from "@/lib/banque";
 import { formatEuros, toCents } from "@/lib/money";
 import { reconcile, reconcileDeposits, type BankLine, type CashLine } from "@/lib/reconcile";
 import type { BankTransaction, CashEntry, UberJourDoc, UberPayout, WithId } from "@/lib/types";
@@ -148,8 +150,11 @@ export default function RapprochementPage() {
     if (!f) return;
     setOpError(null);
     try {
-      const rows = (await readSpreadsheet(f)).map(rowToBank).filter((r) => r !== null);
-      if (!rows.length) throw new Error("Aucune opération reconnue. Colonnes attendues : Date, Libellé, Montant (ou Débit / Crédit).");
+      const lues = (await readSpreadsheet(f)).map(rowToBank).filter((r) => r !== null);
+      if (!lues.length) throw new Error("Aucune opération reconnue. Colonnes attendues : Date, Libellé, Montant (ou Débit / Crédit).");
+      // Opérations déjà relevées automatiquement (DSP2) : on ne les réimporte pas depuis le fichier.
+      const rows = sansDoublonsImport(lues, bank.items.filter((b) => b.source === "banque"));
+      const dejaReleves = lues.length - rows.length;
       const importId = `${Date.now()}`;
       const seen = new Map<string, number>();
       // Firestore limite un lot à 500 écritures.
@@ -163,7 +168,9 @@ export default function RapprochementPage() {
         }
         await batch.commit();
       }
-      setInfo(`${rows.length} opération(s) bancaire(s) importée(s). Les doublons d'un précédent import sont ignorés.`);
+      setInfo(
+        `${rows.length} opération(s) bancaire(s) importée(s). Les doublons d'un précédent import sont ignorés.${dejaReleves ? ` ${dejaReleves} déjà présente(s) grâce au relevé automatique.` : ""}`,
+      );
     } catch (e) {
       setOpError((e as Error).message);
     } finally {
@@ -191,6 +198,8 @@ export default function RapprochementPage() {
       <input ref={bankFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importBank(e.target.files?.[0])} />
       <input ref={uberJoursFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importUberJours(e.target.files?.[0])} />
       <input ref={uberFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importUber(e.target.files?.[0])} />
+
+      <BanqueCard />
 
       <div className="mb-4 grid grid-cols-2 items-end gap-2 sm:max-w-xl sm:grid-cols-3">
         <div className="col-span-2 sm:col-span-1">
@@ -387,14 +396,14 @@ export default function RapprochementPage() {
       ) : (
         <div className="space-y-4">
           {monthBank.length === 0 ? (
-            <Empty>Aucune opération importée pour ce mois.</Empty>
+            <Empty>Aucune opération relevée pour ce mois.</Empty>
           ) : (
             <ul className="divide-y divide-border rounded-card border border-border bg-surface">
               {monthBank.map((b) => (
                 <li key={b.id} className="flex items-center justify-between gap-3 p-3 text-sm">
                   <div className="min-w-0">
                     <div className="truncate">{b.libelle}</div>
-                    <div className="text-xs text-muted">{fr(b.date)}</div>
+                    <div className="text-xs text-muted">{fr(b.date)}{b.source === "banque" ? "" : " · import"}</div>
                   </div>
                   <span className={`shrink-0 font-medium tabular-nums ${b.montant < 0 ? "text-danger" : "text-success"}`}>{formatEuros(b.montant)}</span>
                 </li>

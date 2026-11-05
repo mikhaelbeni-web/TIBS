@@ -16,6 +16,8 @@ export async function GET() {
     GOOGLE_CLIENT_ID: present("GOOGLE_CLIENT_ID"),
     GOOGLE_CLIENT_SECRET: present("GOOGLE_CLIENT_SECRET"),
     CRON_SECRET: present("CRON_SECRET"),
+    ENABLEBANKING_APP_ID: present("ENABLEBANKING_APP_ID"),
+    ENABLEBANKING_PRIVATE_KEY: present("ENABLEBANKING_PRIVATE_KEY"),
     FIREBASE_SERVICE_ACCOUNT: "ok",
     base_de_donnees: "non testée",
   };

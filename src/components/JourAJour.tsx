@@ -14,8 +14,8 @@ const fr = (iso: string) => iso.split("-").reverse().join("/");
 const hier = () => new Date(Date.now() - 86400000).toLocaleDateString("sv-SE", { timeZone: "Europe/Paris" });
 const lendemain = (iso: string) => new Date(Date.parse(`${iso}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
 
-const TONS: Record<Statut, "green" | "red" | "orange" | "neutral"> = { ok: "green", ecart: "red", attente: "orange", absent: "neutral" };
-const MOTS: Record<Statut, string> = { ok: "OK", ecart: "Écart", attente: "En attente", absent: "Pas de données" };
+const TONS: Record<Statut, "green" | "red" | "orange" | "neutral"> = { ok: "green", proche: "orange", ecart: "red", attente: "orange", absent: "neutral" };
+const MOTS: Record<Statut, string> = { ok: "OK", proche: "À vérifier", ecart: "Écart", attente: "En attente", absent: "Pas de données" };
 
 const CATS: Record<string, string> = { cb: "CB", especes: "Espèces", uber: "Uber", ticketsResto: "Titres resto", autres: "Autre" };
 
@@ -256,6 +256,7 @@ export function JourAJour({
                   <p className={`text-xs ${uberSemaine.statut === "ecart" ? "text-danger" : "text-muted"}`}>
                     Écart ventes Uber − L&apos;Addition : {formatEuros(uberSemaine.ecart)}
                     {uberSemaine.joursSaisis < 7 ? ` (il manque ${7 - uberSemaine.joursSaisis} ticket(s) Z cette semaine)` : ""}
+                    {uberSemaine.statut === "proche" ? " : petit écart, sans doute les commandes passées entre minuit et la fermeture, qu'Uber compte dans l'autre semaine." : ""}
                   </p>
                 )}
                 <Ligne label="Mail Uber · net versé">{formatEuros(uberSemaine.versement.montant)}</Ligne>
