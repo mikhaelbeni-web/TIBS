@@ -3,6 +3,7 @@
 import { doc, onSnapshot } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
+import { LadditionIdentifiants } from "@/components/Laddition";
 import { useRestaurant } from "@/components/RestaurantProvider";
 import { Badge, Button, Card, Field, Input, PageHeader, Select } from "@/components/ui";
 import { db } from "@/lib/firebase";
@@ -173,6 +174,8 @@ export default function ReglagesPage() {
     <div className="space-y-4 pb-24">
       <PageHeader title="Réglages" action={<Badge>{current.court}</Badge>} />
       <p className="text-sm text-muted">Ces réglages ne concernent que {current.nom}. Change de restaurant avec la pastille pour régler l&rsquo;autre.</p>
+
+      <LadditionIdentifiants />
 
       {/* Lecture des PDF */}
       <Card className="space-y-4">
