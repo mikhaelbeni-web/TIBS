@@ -17,7 +17,29 @@ export interface EtatRobot {
   besoin?: string;
 }
 
-async function config(rid: RestaurantId): Promise<{ cfg: ConfigUber; modeAuto: boolean }> {
+/**
+ * settings/uberCode : quand Uber demande un code, le robot l'annonce ici ({ attente, canal, depuis }) ;
+ * l'app affiche une case, le gérant y tape le code ({ code }), le robot le lit puis efface le document.
+ */
+const refCode = (rid: RestaurantId) => adminDb().doc(`restaurants/${rid}/settings/uberCode`);
+
+async function attendreCodeSaisi(rid: RestaurantId, canal: "sms" | "mail" | "inconnu", delaiMs = 120_000): Promise<string | null> {
+  const ref = refCode(rid);
+  const depuis = Date.now();
+  await ref.set({ attente: true, canal, depuis });
+  try {
+    while (Date.now() - depuis < delaiMs) {
+      const code = (await ref.get()).get("code");
+      if (typeof code === "string" && /^\d{4,8}$/.test(code.trim())) return code.trim();
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
+    return null;
+  } finally {
+    await ref.delete().catch(() => {});
+  }
+}
+
+async function config(rid: RestaurantId, interactif = false): Promise<{ cfg: ConfigUber; modeAuto: boolean }> {
   const d = (await refUber(rid).get()).data();
   if (!d?.email || !d?.motDePasse) throw new UberError("Identifiants Uber Eats non renseignés : ajoute-les dans Réglages.", undefined, "identifiants");
   let motDePasse: string;
@@ -40,13 +62,14 @@ async function config(rid: RestaurantId): Promise<{ cfg: ConfigUber; modeAuto: b
       boutique: d.boutique || undefined,
       cookies,
       jetonGmail: () => jetonBoite(rid),
+      ...(interactif ? { attendreCode: (canal: "sms" | "mail" | "inconnu") => attendreCodeSaisi(rid, canal) } : {}),
     },
     modeAuto: d.modeAuto === true,
   };
 }
 
-async function avecSession<T>(rid: RestaurantId, travail: (s: SessionUber, cfg: ConfigUber, modeAuto: boolean) => Promise<T>): Promise<T> {
-  const { cfg, modeAuto } = await config(rid);
+async function avecSession<T>(rid: RestaurantId, interactif: boolean, travail: (s: SessionUber, cfg: ConfigUber, modeAuto: boolean) => Promise<T>): Promise<T> {
+  const { cfg, modeAuto } = await config(rid, interactif);
   const s = await ouvrirUber(cfg);
   try {
     return await travail(s, cfg, modeAuto);
@@ -74,11 +97,14 @@ export interface ResultatReleve extends ResultatImport {
  * Passage du robot : lit la liste des problèmes, la range dans le suivi, lit le montant des nouvelles
  * commandes à contester, puis (mode automatique) conteste celles qui sont « à contester ».
  */
-export async function releverUber(rid: RestaurantId, { budgetMs = 100_000, contesterAuto }: { budgetMs?: number; contesterAuto?: boolean } = {}): Promise<ResultatReleve> {
+export async function releverUber(
+  rid: RestaurantId,
+  { budgetMs = 100_000, contesterAuto, interactif = false }: { budgetMs?: number; contesterAuto?: boolean; interactif?: boolean } = {},
+): Promise<ResultatReleve> {
   const debut = Date.now();
   const reste = () => budgetMs - (Date.now() - debut);
   try {
-    const r = await avecSession(rid, async (s, cfg, modeAuto) => {
+    const r = await avecSession(rid, interactif, async (s, cfg, modeAuto) => {
       const { lignes, diagnostic } = await lireProblemes(s, cfg);
       const imp = await importerLignes(rid, lignes, "robot");
       const out: ResultatReleve = { ...imp, lues: lignes.length, montantsLus: 0, contestees: [], echecs: [], diagnostic };
@@ -134,7 +160,7 @@ export async function contesterFiche(rid: RestaurantId, id: string, essai: boole
   if (!snap.exists) throw new UberError("Fiche introuvable.");
   const f = snap.data() as Contestation;
   try {
-    const r = await avecSession(rid, (s, cfg) => contester(s, cfg, f.commande, f.commentaire ?? "", essai));
+    const r = await avecSession(rid, true, (s, cfg) => contester(s, cfg, f.commande, f.commentaire ?? "", essai));
     if (!essai) {
       if (r.envoyee) {
         await col.doc(id).update({

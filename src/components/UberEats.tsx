@@ -1,7 +1,9 @@
 "use client";
 
+import { doc, onSnapshot, setDoc } from "firebase/firestore";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { db } from "@/lib/firebase";
 import { useAuth } from "@/components/AuthProvider";
 import { useRestaurant } from "@/components/RestaurantProvider";
 import { Badge, Button, Card, ErrorBox, Field, Input } from "@/components/ui";
@@ -204,7 +206,7 @@ export function UberEatsIdentifiants() {
         {etat && <Badge tone={etat.configure ? "green" : "neutral"}>{etat.configure ? "Configuré" : "Non configuré"}</Badge>}
       </div>
       <p className="text-sm text-muted">
-        Le robot se connecte à Uber Eats Manager pour {current.nom}, relève les commandes avec un problème et conteste celles marquées « Problème facturé » ou « Remboursement effectué par Uber ». Si Uber demande un code, il le lit dans la boîte Gmail du restaurant : le compte Uber doit donc utiliser cette adresse.
+        Le robot se connecte à Uber Eats Manager pour {current.nom}, relève les commandes avec un problème et conteste celles marquées « Problème facturé » ou « Remboursement effectué par Uber ». Si Uber demande un code de vérification, une case apparaît sur la page Contestations pour le taper ; ensuite la session est gardée, le code n&rsquo;est redemandé que rarement.
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="E-mail du compte Uber Eats">
@@ -241,5 +243,70 @@ export function UberEatsIdentifiants() {
       {info && <p className="text-sm text-success">{info}</p>}
       <ErrorBox message={error} />
     </Card>
+  );
+}
+
+/**
+ * Case « Code reçu d'Uber » : apparaît quand le robot attend le code de vérification envoyé par Uber
+ * (par mail ou SMS au titulaire du compte). Le code est écrit dans settings/uberCode, que le robot lit.
+ */
+export function CodeUber() {
+  const { rid } = useRestaurant();
+  const [attente, setAttente] = useState<{ canal: string; depuis: number } | null>(null);
+  const [code, setCode] = useState("");
+  const [envoye, setEnvoye] = useState(false);
+  const [erreur, setErreur] = useState<string | null>(null);
+
+  useEffect(
+    () =>
+      onSnapshot(
+        doc(db(), "restaurants", rid, "settings", "uberCode"),
+        (s) => {
+          const d = s.data();
+          setAttente(d?.attente ? { canal: String(d.canal ?? ""), depuis: Number(d.depuis ?? 0) } : null);
+          if (!d) {
+            setEnvoye(false);
+            setCode("");
+          }
+        },
+        () => {},
+      ),
+    [rid],
+  );
+
+  if (!attente) return null;
+  async function envoyer() {
+    setErreur(null);
+    try {
+      await setDoc(doc(db(), "restaurants", rid, "settings", "uberCode"), { code: code.trim() }, { merge: true });
+      setEnvoye(true);
+    } catch (e) {
+      setErreur((e as Error).message);
+    }
+  }
+  const ou = attente.canal === "sms" ? "par SMS" : attente.canal === "mail" ? "par mail" : "";
+  return (
+    <div className="fixed inset-x-0 bottom-20 z-40 mx-auto w-[min(100%-2rem,28rem)] rounded-card border-2 border-primary bg-surface p-4 shadow-sheet md:bottom-6">
+      <p className="font-semibold">Uber demande un code de vérification</p>
+      <p className="mb-3 text-sm text-muted">
+        Uber vient d&rsquo;envoyer un code {ou} au titulaire du compte. Tape-le ici : le robot attend 2 minutes.
+      </p>
+      {envoye ? (
+        <p className="text-sm text-success">Code transmis au robot, il continue…</p>
+      ) : (
+        <div className="flex gap-2">
+          <Input
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            autoFocus
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))}
+            placeholder="Code"
+          />
+          <Button onClick={envoyer} disabled={code.length < 4}>Valider</Button>
+        </div>
+      )}
+      <ErrorBox message={erreur} />
+    </div>
   );
 }

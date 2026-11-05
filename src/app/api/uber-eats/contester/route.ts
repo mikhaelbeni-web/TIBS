@@ -2,7 +2,7 @@ import { requireGerant, restaurantParam } from "@/lib/server/authz";
 import { UberError } from "@/lib/server/uberEatsBot";
 import { contesterFiche } from "@/lib/server/uberService";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 /**
  * POST /api/uber-eats/contester?r=19e { id, essai? } (gérant) : le robot conteste une commande dans Uber Eats Manager.
