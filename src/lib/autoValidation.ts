@@ -24,14 +24,13 @@ export type Doute =
   | "montant_eleve"
   | "type_document"
   | "autre_restaurant"
-  | "plusieurs_factures"
   | "mois_ancien"
   | "remise_a_verifier";
 
 export const DOUTE_TEXTE: Record<Doute, string> = {
   incomplete: "Lecture incomplète : il manque le fournisseur, la date ou le montant.",
   lecture: "Le PDF n'a pas été lu correctement par l'IA.",
-  fournisseur_inconnu: "Expéditeur qui n'est pas un fournisseur connu (ou mail transféré).",
+  fournisseur_inconnu: "Le fournisseur lu sur le PDF n'apparaît pas dans le mail (mail transféré ou expéditeur inconnu).",
   sans_numero: "Numéro de facture absent.",
   sans_date: "Date de facture absente.",
   date_future: "Date de facture dans le futur.",
@@ -39,14 +38,13 @@ export const DOUTE_TEXTE: Record<Doute, string> = {
   montants_absents: "HT ou TVA non lus : impossible de contrôler le calcul.",
   avoir: "Avoir (montant négatif) : à confirmer.",
   montant_nul: "Montant à zéro.",
-  calcul: "HT + TVA ne donne pas le TTC (consigne, acompte ou erreur de lecture ?).",
+  calcul: "HT + TVA s'écarte du TTC de plus de 2 € (acompte ou erreur de lecture ?).",
   taux_tva: "Taux de TVA anormal (au-delà de 20 %).",
   doublon: "Doublon possible : même numéro, ou même montant à quelques jours près, chez ce fournisseur.",
   montant_inhabituel: "Montant très supérieur aux factures habituelles de ce fournisseur.",
-  montant_eleve: "Montant élevé pour un fournisseur encore peu connu (moins de 3 factures).",
+  montant_eleve: "Première facture d'un nouveau fournisseur, au-dessus de 2 000 €.",
   type_document: "Le mail ou le PDF parle d'avoir, relevé, bon de livraison, devis, duplicata ou relance.",
   autre_restaurant: "Le PDF semble adressé à l'autre restaurant.",
-  plusieurs_factures: "Le mail contient plusieurs factures : à contrôler une par une.",
   mois_ancien: "Facture d'un mois déjà clôturé (avant le mois dernier).",
   remise_a_verifier: "Remise à vérifier à la main après une validation automatique.",
 };
@@ -58,10 +56,10 @@ export interface ContexteValidation {
   restaurant: "19e" | "17e";
   /** Jour de réception du mail (AAAA-MM-JJ), sinon aujourd'hui. */
   recuLe?: string;
-  /** Le même mail a donné plusieurs factures. */
-  plusieursFactures?: boolean;
-  /** L'expéditeur est un fournisseur connu (règles de tri ou e-mail de la fiche fournisseur). */
+  /** L'expéditeur est un fournisseur connu (règles de tri, e-mail de la fiche, ou nom du PDF présent dans le mail). */
   fournisseurConnu: boolean;
+  /** Reconnu seulement par son nom dans le mail, sans fiche ni facture : plafond pour la première facture. */
+  fournisseurNouveau?: boolean;
   /** Même fournisseur et même numéro (ou même TTC à ±3 jours) déjà enregistré ou reçu. */
   doublon: boolean;
   /** TTC des factures déjà enregistrées pour ce fournisseur (centimes). */
@@ -71,16 +69,36 @@ export interface ContexteValidation {
 }
 
 const TOLERANCE_CALCUL = 2; // centimes d'arrondi
+const ECART_MAX = 200; // 2 € de consigne / frais hors TVA
 const TAUX_MAX = 0.205; // 20 % + marge d'arrondi
 const JOURS_FUTUR = 2; // après la réception du mail
 const JOURS_PASSE = 62; // avant la réception du mail
 const FACTEUR_INHABITUEL = 3;
 const HISTORIQUE_MIN = 3;
-const PLAFOND_NOUVEAU = 200_000; // 2 000 € TTC tant que le fournisseur a moins de 3 factures
+const PLAFOND_NOUVEAU = 200_000; // 2 000 € TTC pour la toute première facture d'un fournisseur
 
 /** Pièces qui ne sont pas une facture à payer, ou qui le sont déjà. */
 const MOTS_DOUTEUX =
   /(?<![\p{L}\d])(avoirs?|relev[ée]s?|r[ée]capitulatif|r[ée]cap|[ée]tat de compte|situation de compte|note de cr[ée]dit|bons? de (livraison|commande)|bl|pro ?forma|devis|duplicata|copie|relance|rappel|mise en demeure)(?![\p{L}\d])/iu;
+
+const plier = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+/** Mots trop courants pour identifier un fournisseur. */
+const MOTS_GENERIQUES = new Set(
+  "sarl sas sasu eurl snc sci societe ste france paris facture factures distribution distributions groupe services service compagnie restaurant restauration ava tibs".split(" "),
+);
+
+/**
+ * Le nom du fournisseur lu sur le PDF figure aussi dans le mail (nom ou adresse de l'expéditeur, objet,
+ * nom du PDF) : mail et facture désignent le même fournisseur, même si l'adresse n'est pas encore connue.
+ * Ex. « SARL POISSONNERIE AZUELOS » ↔ « Patrick AZUELOS <poissonneriefinedefrance@gmail.com> ».
+ */
+export function nomDansLeMail(fournisseur: string, mail: { from?: string; subject?: string; attachment?: string }): boolean {
+  const texte = plier([mail.from, mail.subject, mail.attachment].filter(Boolean).join(" "));
+  const mots = plier(fournisseur)
+    .split(/[^a-z0-9]+/)
+    .filter((m) => m.length >= 4 && !MOTS_GENERIQUES.has(m));
+  return mots.some((m) => texte.includes(m));
+}
 
 /** Mois précédent AAAA-MM. */
 function moisPrecedent(jour: string): string {
@@ -108,17 +126,18 @@ export function doutesFacture(item: InboxFacture, ctx: ContexteValidation): Dout
   const textes = [item.source.subject, item.source.attachment, item.numero].filter(Boolean).join(" ");
   if (MOTS_DOUTEUX.test(textes)) d.push("type_document");
   if (item.etablissementPdf && item.etablissementPdf !== ctx.restaurant) d.push("autre_restaurant");
-  if (ctx.plusieursFactures) d.push("plusieurs_factures");
 
   const { montantHT: ht, montantTVA: tva, montantTTC: ttc } = item;
   if (ht === undefined || tva === undefined || ttc === undefined) d.push("montants_absents");
   else {
     if (ttc < 0) d.push("avoir");
     else if (ttc === 0) d.push("montant_nul");
-    if (Math.abs(ht + tva - ttc) > TOLERANCE_CALCUL) d.push("calcul");
+    // Petit écart toléré : consigne, frais ou éco-participation hors TVA (2 € et 2 % du TTC au plus).
+    const ecart = Math.abs(ht + tva - ttc);
+    if (ecart > TOLERANCE_CALCUL && (ecart > ECART_MAX || ecart > Math.abs(ttc) * 0.02)) d.push("calcul");
     if (ttc > 0 && (tva < 0 || ht <= 0 || tva > ht * TAUX_MAX + TOLERANCE_CALCUL)) d.push("taux_tva");
     if (ttc > 0 && ctx.historiqueTTC.length >= HISTORIQUE_MIN && ttc > FACTEUR_INHABITUEL * Math.max(...ctx.historiqueTTC)) d.push("montant_inhabituel");
-    if (ttc > PLAFOND_NOUVEAU && ctx.historiqueTTC.length < HISTORIQUE_MIN) d.push("montant_eleve");
+    if (ttc > PLAFOND_NOUVEAU && ctx.fournisseurNouveau && ctx.historiqueTTC.length === 0) d.push("montant_eleve");
   }
   if (ctx.doublon) d.push("doublon");
   return d;

@@ -1,6 +1,6 @@
 import "server-only";
 import { FieldValue } from "firebase-admin/firestore";
-import { doutesFacture, factureAutoId, type Doute } from "@/lib/autoValidation";
+import { doutesFacture, factureAutoId, nomDansLeMail, type Doute } from "@/lib/autoValidation";
 import type { InboxFacture } from "@/lib/ingest";
 import { emailOf, mergeRules, senderMatches, type MailRules } from "@/lib/mail";
 import { normNumero } from "@/lib/releves";
@@ -10,6 +10,8 @@ import { adminDb } from "@/lib/server/admin";
 export interface AutoResult {
   valides: number;
   enDoute: number;
+  /** Nombre de factures en attente par raison (une facture peut en avoir plusieurs). */
+  raisons?: Partial<Record<Doute, number>>;
 }
 
 const parisJour = (t = Date.now()) => new Date(t).toLocaleDateString("en-CA", { timeZone: "Europe/Paris" });
@@ -73,11 +75,6 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
     ttc: Number(d.get("montantTTC")),
   }));
   const factureDocs = [...pending.docs, ...traites.docs].filter((d) => d.get("item.kind") === "facture");
-  const parMail = new Map<string, number>();
-  for (const d of factureDocs) {
-    const m = String(d.get("item.source.messageId") ?? "");
-    if (m && d.get("statut") !== "releve") parMail.set(m, (parMail.get(m) ?? 0) + 1);
-  }
   const aujourdhui = parisJour();
 
   for (const d of factures) {
@@ -86,8 +83,10 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
     const email = emailOf(item.source?.from ?? "");
     const reconnu = fournisseurDeLExpediteur(email, rulesDe.get(item.source?.boite ?? rid)!, suppliers, boites);
     const fiches = suppliers.filter((s) => low(s.nom) === nom);
-    // Connu = l'expéditeur désigne ce fournisseur-là, et une seule fiche porte ce nom dans ce restaurant.
-    const connu = reconnu !== null && low(reconnu) === nom && fiches.length <= 1;
+    // Connu = l'expéditeur désigne ce fournisseur-là (règles, fiche), ou bien le mail porte le nom lu sur le PDF ;
+    // jamais un mail transféré depuis une boîte du restaurant, et une seule fiche à ce nom.
+    const parLeMail = reconnu === null && !boites.includes(email) && nomDansLeMail(item.fournisseur, item.source ?? {});
+    const connu = ((reconnu !== null && low(reconnu) === nom) || parLeMail) && fiches.length <= 1;
     const fiche = fiches[0];
     const numero = normNumero(item.numero ?? "");
     const deCeFournisseur = invoices.filter((i) => (fiche && i.supplierId === fiche.id) || i.nom === nom);
@@ -104,8 +103,8 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
       aujourdhui,
       restaurant: rid,
       ...(Number.isFinite(recu) ? { recuLe: parisJour(recu) } : {}),
-      plusieursFactures: (parMail.get(item.source?.messageId ?? "") ?? 0) > 1,
       fournisseurConnu: connu,
+      fournisseurNouveau: parLeMail && fiches.length === 0,
       doublon,
       historiqueTTC: deCeFournisseur.map((i) => i.ttc).filter((n) => Number.isFinite(n) && n > 0),
       remiseAVerifier: d.get("remiseAVerifier") === true,
@@ -113,6 +112,8 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
 
     if (doutes.length) {
       out.enDoute++;
+      out.raisons ??= {};
+      for (const x of doutes) out.raisons[x] = (out.raisons[x] ?? 0) + 1;
       const avant = (d.get("doutes") as Doute[] | undefined) ?? [];
       if (avant.join() !== doutes.join()) await d.ref.update({ doutes });
       continue;
