@@ -48,6 +48,11 @@ export async function POST(request: Request) {
   }
 
   if (snap.get("statut") !== "rejete") return Response.json({ error: "Seul un élément ignoré ou validé automatiquement peut être remis à vérifier." }, { status: 409 });
-  await ref.update({ statut: "a_verifier", traiteLe: FieldValue.delete() });
+  // Ignorée automatiquement (« pas une facture ») : remise à la main, elle ne sera plus jamais rangée toute seule.
+  await ref.update({
+    statut: "a_verifier",
+    traiteLe: FieldValue.delete(),
+    ...(snap.get("auto") === true ? { auto: FieldValue.delete(), remiseAVerifier: true } : {}),
+  });
   return Response.json({ status: "ok" });
 }

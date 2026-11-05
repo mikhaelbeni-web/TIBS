@@ -29,21 +29,21 @@ export type Doute =
 
 export const DOUTE_TEXTE: Record<Doute, string> = {
   incomplete: "Lecture incomplète : il manque le fournisseur, la date ou le montant.",
-  lecture: "Le PDF n'a pas été lu correctement par l'IA.",
+  lecture: "PDF pas encore lu par l'IA (limite, budget ou erreur) : il sera relu au prochain passage, ou touche « Lire ce PDF avec l'IA ».",
   fournisseur_inconnu: "Le fournisseur lu sur le PDF n'apparaît pas dans le mail (mail transféré ou expéditeur inconnu).",
   sans_numero: "Numéro de facture absent.",
   sans_date: "Date de facture absente.",
   date_future: "Date de facture dans le futur.",
   date_ancienne: "Date de facture plus de 2 mois avant le mail (jour et mois inversés ?).",
   montants_absents: "HT ou TVA non lus : impossible de contrôler le calcul.",
-  avoir: "Avoir (montant négatif) : à confirmer.",
+  avoir: "Avoir d'un nouveau fournisseur, ou plus gros que ses factures habituelles : à confirmer.",
   montant_nul: "Montant à zéro.",
   calcul: "HT + TVA s'écarte du TTC de plus de 2 € (acompte ou erreur de lecture ?).",
   taux_tva: "Taux de TVA anormal (au-delà de 20 %).",
   doublon: "Doublon possible : même numéro, ou même montant à quelques jours près, chez ce fournisseur.",
   montant_inhabituel: "Montant très supérieur aux factures habituelles de ce fournisseur.",
   montant_eleve: "Première facture d'un nouveau fournisseur, au-dessus de 2 000 €.",
-  type_document: "Le mail ou le PDF parle d'avoir, relevé, bon de livraison, devis, duplicata ou relance.",
+  type_document: "Le mail parle de relevé, bon de livraison, devis, duplicata ou relance, ou d'avoir alors que le montant lu est positif.",
   autre_restaurant: "Le PDF semble adressé à l'autre restaurant.",
   mois_ancien: "Facture d'un mois déjà clôturé (avant le mois dernier).",
   remise_a_verifier: "Remise à vérifier à la main après une validation automatique.",
@@ -79,7 +79,7 @@ const PLAFOND_NOUVEAU = 200_000; // 2 000 € TTC pour la toute première factur
 
 /** Pièces qui ne sont pas une facture à payer, ou qui le sont déjà. */
 const MOTS_DOUTEUX =
-  /(?<![\p{L}\d])(avoirs?|relev[ée]s?|r[ée]capitulatif|r[ée]cap|[ée]tat de compte|situation de compte|note de cr[ée]dit|bons? de (livraison|commande)|bl|pro ?forma|devis|duplicata|copie|relance|rappel|mise en demeure)(?![\p{L}\d])/iu;
+  /(?<![\p{L}\d])(relev[ée]s?|r[ée]capitulatif|r[ée]cap|[ée]tat de compte|situation de compte|bons? de (livraison|commande)|bl|pro ?forma|devis|duplicata|copie|relance|rappel|mise en demeure)(?![\p{L}\d])/iu;
 
 const plier = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 /** Mots trop courants pour identifier un fournisseur. */
@@ -100,6 +100,9 @@ export function nomDansLeMail(fournisseur: string, mail: { from?: string; subjec
   return mots.some((m) => texte.includes(m));
 }
 
+/** Avoir annoncé dans l'objet, le nom du PDF ou le numéro. */
+const MOTS_AVOIR = /(?<![\p{L}\d])(avoirs?|note de cr[ée]dit|av\d+)(?![\p{L}])/iu;
+
 /** Mois précédent AAAA-MM. */
 function moisPrecedent(jour: string): string {
   const [y, m] = jour.split("-").map(Number);
@@ -112,8 +115,11 @@ const jours = (a: string, b: string) => (Date.parse(`${a}T12:00:00Z`) - Date.par
 export function doutesFacture(item: InboxFacture, ctx: ContexteValidation): Doute[] {
   const d: Doute[] = [];
   if (ctx.remiseAVerifier) d.push("remise_a_verifier");
-  if (item.incomplet) d.push("incomplete");
-  if (item.lecture) d.push("lecture");
+  // PDF pas (encore) lu : une seule raison, inutile de lister tout ce qui manque.
+  if (item.lecture || item.incomplet) {
+    d.push(item.lecture ? "lecture" : "incomplete");
+    return d;
+  }
   if (!ctx.fournisseurConnu) d.push("fournisseur_inconnu");
   if (!item.numero?.trim()) d.push("sans_numero");
 
@@ -124,18 +130,23 @@ export function doutesFacture(item: InboxFacture, ctx: ContexteValidation): Dout
   else if (item.dateFacture.slice(0, 7) < moisPrecedent(ctx.aujourdhui)) d.push("mois_ancien");
 
   const textes = [item.source.subject, item.source.attachment, item.numero].filter(Boolean).join(" ");
-  if (MOTS_DOUTEUX.test(textes)) d.push("type_document");
+  const annonceAvoir = MOTS_AVOIR.test(textes);
+  const negatif = item.montantTTC !== undefined && item.montantTTC < 0;
+  // « Avoir » dans le mail mais montants positifs (ou l'inverse du sens) : pièce mal lue.
+  if (MOTS_DOUTEUX.test(textes) || (annonceAvoir && !negatif)) d.push("type_document");
   if (item.etablissementPdf && item.etablissementPdf !== ctx.restaurant) d.push("autre_restaurant");
 
   const { montantHT: ht, montantTVA: tva, montantTTC: ttc } = item;
   if (ht === undefined || tva === undefined || ttc === undefined) d.push("montants_absents");
   else {
-    if (ttc < 0) d.push("avoir");
+    // Avoir lu en négatif : validé seul s'il vient d'un fournisseur qui a déjà des factures et n'en dépasse pas la plus grosse.
+    if (ttc < 0 && (ctx.fournisseurNouveau || !ctx.historiqueTTC.length || -ttc > Math.max(...ctx.historiqueTTC))) d.push("avoir");
     else if (ttc === 0) d.push("montant_nul");
     // Petit écart toléré : consigne, frais ou éco-participation hors TVA (2 € et 2 % du TTC au plus).
     const ecart = Math.abs(ht + tva - ttc);
     if (ecart > TOLERANCE_CALCUL && (ecart > ECART_MAX || ecart > Math.abs(ttc) * 0.02)) d.push("calcul");
-    if (ttc > 0 && (tva < 0 || ht <= 0 || tva > ht * TAUX_MAX + TOLERANCE_CALCUL)) d.push("taux_tva");
+    const [aHT, aTVA, signe] = [Math.abs(ht), Math.abs(tva), Math.sign(ttc)];
+    if (ttc !== 0 && (Math.sign(tva) === -signe || Math.sign(ht) !== signe || aTVA > aHT * TAUX_MAX + TOLERANCE_CALCUL)) d.push("taux_tva");
     if (ttc > 0 && ctx.historiqueTTC.length >= HISTORIQUE_MIN && ttc > FACTEUR_INHABITUEL * Math.max(...ctx.historiqueTTC)) d.push("montant_inhabituel");
     if (ttc > PLAFOND_NOUVEAU && ctx.fournisseurNouveau && ctx.historiqueTTC.length === 0) d.push("montant_eleve");
   }

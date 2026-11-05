@@ -45,6 +45,11 @@ describe("doutesFacture", () => {
     expect(doutesFacture(facture({ montantHT: 446_796, montantTVA: 24_574, montantTTC: 471_370 }), ctx({ historiqueTTC: [380_000] }))).toEqual([]);
     expect(doutesFacture(facture({ montantHT: 10_000, montantTVA: 3_000, montantTTC: 13_000 }), ctx())).toEqual(["taux_tva"]);
     expect(doutesFacture(facture({ montantHT: -10_000, montantTVA: -550, montantTTC: -10_550 }), ctx())).toEqual(["avoir"]);
+    // Avoir d'un fournisseur habituel, lu en négatif et annoncé comme tel : validé.
+    const avoir = facture({ numero: "AV123", montantHT: -10_000, montantTVA: -550, montantTTC: -10_550, source: { messageId: "m", subject: "Votre avoir AV123" } });
+    expect(doutesFacture(avoir, ctx({ historiqueTTC: [20_000, 30_000] }))).toEqual([]);
+    // « Avoir » dans l'objet mais montant positif : contradiction.
+    expect(doutesFacture(facture({ source: { messageId: "m", subject: "Votre avoir n°12" } }), ctx())).toEqual(["type_document"]);
     expect(doutesFacture(facture({ lecture: "erreur" }), ctx())).toEqual(["lecture"]);
   });
   it("tient compte du contexte", () => {
