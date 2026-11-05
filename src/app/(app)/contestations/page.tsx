@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { useRestaurant } from "@/components/RestaurantProvider";
+import { apiUber, RobotUber, useEtatUber, VueRobot, type DiagnosticUber, type ErreurRobot } from "@/components/UberEats";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Sheet } from "@/components/ui";
 import {
   bilan,
@@ -105,6 +106,7 @@ export default function ContestationsPage() {
       <p className="mb-4 text-sm text-muted">
         Suivi des erreurs de commande signalées par les clients. Seules les commandes marquées « Problème facturé » ou « Remboursement effectué par Uber » sont mises à contester.
       </p>
+      <RobotUber onFini={recharger} />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi titre="Retenu par Uber" valeur={formatEuros(total.retenu)} sous={total.sansMontant ? `${total.sansMontant} sans montant` : `${total.nombre} commande(s)`} />
@@ -162,6 +164,7 @@ export default function ContestationsPage() {
                             <span>{f.montant !== undefined ? `retenu ${formatEuros(f.montant)}` : <span className="text-warning">montant ?</span>}</span>
                             {f.dateContestation && <span className="text-muted">contestée le {fr(f.dateContestation)}</span>}
                             {f.dateVersement && <span className="text-success">versé le {fr(f.dateVersement)}</span>}
+                            {f.erreurRobot && f.issue === "a_contester" && <span className="text-warning">robot : échec</span>}
                           </div>
                         </Card>
                       </button>
@@ -290,6 +293,12 @@ function AjoutForm({ onImport, onDone }: { onImport: (l: LigneUber[]) => Promise
 
 function SuiviForm({ fiche, onDone }: { fiche: Fiche; onDone: () => Promise<void> }) {
   const api = useApi();
+  const { user } = useAuth();
+  const { rid } = useRestaurant();
+  const { etat: robot } = useEtatUber();
+  const [robotBusy, setRobotBusy] = useState<"essai" | "envoi" | null>(null);
+  const [vue, setVue] = useState<DiagnosticUber | undefined>(undefined);
+  const [robotInfo, setRobotInfo] = useState<string | null>(null);
   const [f, setF] = useState({
     motif: fiche.motif,
     etatUber: fiche.etatUber,
@@ -334,6 +343,35 @@ function SuiviForm({ fiche, onDone }: { fiche: Fiche; onDone: () => Promise<void
       setErreur((err as Error).message);
     } finally {
       setEnvoi(false);
+    }
+  }
+
+  /** Le robot utilise le message enregistré : on l'enregistre d'abord, puis il ouvre la commande dans Uber Eats Manager. */
+  async function parRobot(essai: boolean) {
+    if (!user) return;
+    setRobotBusy(essai ? "essai" : "envoi");
+    setErreur(null);
+    setRobotInfo(null);
+    setVue(undefined);
+    try {
+      await api("PATCH", { id: fiche.id, champs: { commentaire: f.commentaire } });
+      const r = await apiUber<{ envoyee: boolean; montant: number | null; diagnostic?: DiagnosticUber }>(user, `/api/uber-eats/contester?r=${rid}`, {
+        method: "POST",
+        body: JSON.stringify({ id: fiche.id, essai }),
+      });
+      setVue(r.diagnostic);
+      if (essai) {
+        setRobotInfo(`Essai réussi : le formulaire est rempli mais rien n'a été envoyé${r.montant ? `. Montant lu : ${formatEuros(r.montant)}` : ""}. Vérifie la capture.`);
+      } else if (r.envoyee) {
+        await onDone();
+      } else {
+        setErreur("Le robot a cliqué sur Envoyer mais Uber n'a pas confirmé. Vérifie la capture, et dans Uber Eats Manager.");
+      }
+    } catch (e) {
+      setErreur((e as Error).message);
+      setVue((e as ErreurRobot).diagnostic);
+    } finally {
+      setRobotBusy(null);
     }
   }
 
@@ -391,6 +429,24 @@ function SuiviForm({ fiche, onDone }: { fiche: Fiche; onDone: () => Promise<void
           </Button>
         )}
       </div>
+      {f.issue === "a_contester" && robot?.configure && (
+        <div className="space-y-2 rounded-control bg-surface-2 p-3">
+          <p className="text-sm font-medium">Robot Uber Eats</p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Button type="button" variant="secondary" disabled={robotBusy !== null} onClick={() => parRobot(true)}>
+              {robotBusy === "essai" ? "Essai en cours…" : "Essai sans envoyer"}
+            </Button>
+            <Button type="button" disabled={robotBusy !== null} onClick={() => confirm(`Envoyer la contestation de ${fiche.commande} à Uber ?`) && parRobot(false)}>
+              {robotBusy === "envoi" ? "Envoi en cours…" : "Contester avec le robot"}
+            </Button>
+          </div>
+          {fiche.erreurRobot && !robotInfo && !erreur && (
+            <p className="text-xs text-warning">Dernier échec le {new Date(fiche.erreurRobot.le).toLocaleString("fr-FR")} : {fiche.erreurRobot.message}</p>
+          )}
+          {robotInfo && <p className="text-sm text-success">{robotInfo}</p>}
+          <VueRobot d={vue} />
+        </div>
+      )}
 
       <div className="grid items-end gap-3 sm:grid-cols-2">
         <Field label="Suivi">
