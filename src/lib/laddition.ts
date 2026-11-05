@@ -9,7 +9,8 @@ export interface CaMensuel {
   ttc10: number;
   ttc20: number;
   ttc55: number;
-  source: "laddition" | "manuel";
+  /** laddition : robot ; export : fichier « Détails par service » importé ; manuel : saisi. */
+  source: "laddition" | "export" | "manuel";
   coherent?: boolean;
   majLe: number;
 }

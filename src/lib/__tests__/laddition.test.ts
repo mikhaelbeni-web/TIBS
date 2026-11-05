@@ -77,3 +77,15 @@ describe("secretBox", () => {
     expect(() => dechiffrer(box, "clé-2")).toThrow();
   });
 });
+
+describe("robot : mois affiché", () => {
+  it("strict : premier et dernier jour du mois", async () => {
+    const { moisAffiche } = await import("../server/ladditionBot");
+    expect(moisAffiche("Du 01/10/2026 au 31/10/2026", "2026-10", true)).toBe(true);
+    expect(moisAffiche("https://x/v2/shift-details?start=2026-10-01&end=2026-10-31", "2026-10", true)).toBe(true);
+    expect(moisAffiche("01/10/26 - 31/10/26", "2026-10", true)).toBe(true);
+    expect(moisAffiche("du 6 octobre 2026 au 5 novembre 2026", "2026-10", true)).toBe(false);
+    expect(moisAffiche("Du 06/10/2026 au 31/10/2026", "2026-10", true)).toBe(false);
+    expect(moisAffiche("octobre 2026", "2026-10")).toBe(true);
+  });
+});
