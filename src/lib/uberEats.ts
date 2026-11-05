@@ -50,15 +50,15 @@ export function contestationConfirmee(texte: string): boolean {
 /** La page de connexion réclame-t-elle un code (SMS ou mail) ? */
 export function demandeCode(texte: string): "sms" | "mail" | "inconnu" | null {
   const t = plat(texte);
-  if (!/code/.test(t) || !/(saisi|entre|envoy|recu|verification|4 chiffres|6 chiffres)/.test(t)) return null;
-  if (/sms|telephone|\+33|numero/.test(t) && !/e-?mail|adresse/.test(t)) return "sms";
-  if (/e-?mail|adresse|boite/.test(t)) return "mail";
+  if (!/code/.test(t) || !/(saisi|entre|envoy|recu|verification|4 chiffres|6 chiffres|enter|sent|digit|verify)/.test(t)) return null;
+  if (/sms|telephone|phone|\+33|numero|number/.test(t) && !/e-?mail|adresse|address/.test(t)) return "sms";
+  if (/e-?mail|adresse|address|boite|@/.test(t)) return "mail";
   return "inconnu";
 }
 
 /** Uber a-t-il affiché une vérification anti-robot ? */
 export function antiRobot(texte: string): boolean {
-  return /captcha|verifiez que vous etes humain|verify you are human|are you a robot|etes-vous un robot|puzzle/.test(plat(texte));
+  return /captcha|verifiez que vous etes humain|verify you are human|are you a robot|etes-vous un robot|puzzle|security check|controle de securite|activite inhabituelle|unusual activity/.test(plat(texte));
 }
 
 /** Boutique « Tib's (K) » : ne garder que les lignes de la boutique de ce restaurant, si elle est renseignée. */

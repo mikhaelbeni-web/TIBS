@@ -29,6 +29,10 @@ describe("lecture des écrans", () => {
     expect(demandeCode("Saisissez le code à 4 chiffres envoyé au +33 6 12 34 56 78")).toBe("sms");
     expect(demandeCode("Saisissez le code à 4 chiffres envoyé à l'adresse e-mail a***@gmail.com")).toBe("mail");
     expect(demandeCode("Commandes du jour")).toBeNull();
+    // Pages Uber servies en anglais (serveur hors de France).
+    expect(demandeCode("Enter the 4-digit code sent to you at t***@gmail.com")).toBe("mail");
+    expect(demandeCode("Enter the 4-digit code sent via SMS to your phone number")).toBe("sms");
+    expect(demandeCode("What's your phone number or email?")).toBeNull();
   });
   it("repère l'anti-robot et filtre par boutique", () => {
     expect(antiRobot("Vérifiez que vous êtes humain")).toBe(true);
