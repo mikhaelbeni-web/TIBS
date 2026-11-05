@@ -21,6 +21,8 @@ export interface Diagnostic {
   titre: string;
   texte: string;
   appels: string[];
+  /** Adresses des cadres (iframes) de la page, le principal d'abord. */
+  cadres?: string[];
   /** Contrôles de la connexion, sans aucune valeur saisie. */
   connexion?: ControleConnexion;
 }
@@ -58,6 +60,25 @@ export function messageAuth(corps: string): string {
     .slice(0, 200);
 }
 
+/**
+ * Résumé d'un corps JSON envoyé aux API de rapports (filtres : dates, établissement) pour le diagnostic.
+ * Les valeurs des champs sensibles sont masquées, chaque valeur est tronquée.
+ */
+export function resumeCorps(corps: string | undefined): string {
+  if (!corps) return "";
+  let j: unknown;
+  try {
+    j = JSON.parse(corps);
+  } catch {
+    return "";
+  }
+  if (!j || typeof j !== "object" || Array.isArray(j)) return "";
+  const parties = Object.entries(j as Record<string, unknown>).map(([k, v]) =>
+    /token|pass|pwd|secret|auth|login|user|mail|identifiant|code/i.test(k) ? `${k}=…` : `${k}=${(JSON.stringify(v) ?? "").slice(0, 60)}`,
+  );
+  return `{${parties.join(", ")}}`.slice(0, 300);
+}
+
 /** Noms des champs d'un corps JSON ou formulaire, sans les valeurs. */
 export function champsDuCorps(corps: string | undefined): string[] {
   if (!corps) return [];
@@ -92,6 +113,7 @@ export interface Extraction {
 }
 
 export type Page = import("puppeteer-core").Page;
+type Frame = import("puppeteer-core").Frame;
 
 const MOIS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 
@@ -145,35 +167,90 @@ export async function lancer() {
   });
 }
 
+/**
+ * Cadres de la page : L'Addition affiche ses pages (CA/TVA, détail des services) dans des iframes
+ * d'un autre domaine. contenuDabord : les iframes avant le cadre principal (le menu).
+ */
+export function cadres(page: Page, contenuDabord = false): Frame[] {
+  const principal = page.mainFrame();
+  const autres = page.frames().filter((f) => f !== principal && !f.detached);
+  return contenuDabord ? [...autres, principal] : [principal, ...autres];
+}
+
+/** Texte visible de tous les cadres (shadow DOM compris) ; avecChamps : valeurs des champs et adresse en plus. */
+export async function texteDesCadres(page: Page, avecChamps = false): Promise<string> {
+  const morceaux: string[] = [];
+  for (const f of cadres(page)) {
+    const t = await f
+      .evaluate((champs) => {
+        const racines: (Document | ShadowRoot)[] = [document];
+        for (let i = 0; i < racines.length; i++) for (const el of racines[i].querySelectorAll("*")) if (el.shadowRoot) racines.push(el.shadowRoot);
+        const textes = [document.body?.innerText ?? ""];
+        for (const r of racines.slice(1)) textes.push([...r.children].map((c) => (c as HTMLElement).innerText ?? c.textContent ?? "").join("\n"));
+        if (champs) {
+          textes.push(racines.flatMap((r) => [...r.querySelectorAll("input")]).map((i) => i.value).join("\n"));
+          textes.push(decodeURIComponent(location.href));
+        }
+        return textes.filter((x) => x.trim()).join("\n");
+      }, avecChamps)
+      .catch(() => "");
+    if (t.trim()) morceaux.push(t);
+  }
+  return morceaux.join("\n");
+}
+
 export async function diagnostic(page: Page, etape: string, appels: string[]): Promise<Diagnostic> {
-  const texte = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+  const texte = await texteDesCadres(page);
   return {
     etape,
     url: urlSansSecret(page.url()),
     titre: await page.title().catch(() => ""),
     texte: texte.slice(0, 6000),
+    cadres: cadres(page).map((f) => urlSansSecret(f.url())).slice(0, 10),
     appels: appels.slice(-40),
   };
 }
 
-/** Clique sur l'élément visible le plus petit dont le texte correspond. */
-export async function cliquerTexte(page: Page, source: string): Promise<boolean> {
-  return page.evaluate((src) => {
-    const re = new RegExp(src, "i");
-    const candidats = [...document.querySelectorAll<HTMLElement>("a, button, [role=menuitem], [role=tab], [role=button], li, span, div, p")]
-      .filter((el) => {
-        const t = (el.innerText ?? "").trim();
-        if (!t || t.length > 80 || !re.test(t)) return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      })
-      .sort((a, b) => a.innerText.length - b.innerText.length);
-    // L'élément le plus profond : un conteneur qui contient un autre candidat est écarté.
-    const el = candidats.find((c) => !candidats.some((o) => o !== c && c.contains(o)));
-    if (!el) return false;
-    (el.closest("a, button, [role=menuitem], [role=tab], [role=button]") as HTMLElement | null ?? el).click();
-    return true;
-  }, source);
+/**
+ * Clique sur l'élément visible le plus petit dont le texte (ou, pour un bouton-icône, aria-label / title)
+ * correspond, dans le premier cadre qui en a un. Shadow DOM compris.
+ */
+export async function cliquerTexte(page: Page, source: string, contenuDabord = false): Promise<boolean> {
+  for (const f of cadres(page, contenuDabord)) {
+    const ok = await f
+      .evaluate((src) => {
+        const re = new RegExp(src, "i");
+        const racines: (Document | ShadowRoot)[] = [document];
+        for (let i = 0; i < racines.length; i++) for (const el of racines[i].querySelectorAll("*")) if (el.shadowRoot) racines.push(el.shadowRoot);
+        const libelle = (el: HTMLElement) => (el.innerText ?? "").trim() || (el.getAttribute("aria-label") ?? "").trim() || (el.getAttribute("title") ?? "").trim();
+        const candidats = racines
+          .flatMap((r) => [...r.querySelectorAll<HTMLElement>("a, button, [role=menuitem], [role=tab], [role=button], li, span, div, p")])
+          .filter((el) => {
+            const t = libelle(el);
+            if (!t || t.length > 80 || !re.test(t)) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          })
+          .sort((a, b) => libelle(a).length - libelle(b).length);
+        // L'élément le plus profond : un conteneur qui contient un autre candidat est écarté.
+        const el = candidats.find((c) => !candidats.some((o) => o !== c && c.contains(o)));
+        if (!el) return false;
+        (el.closest("a, button, [role=menuitem], [role=tab], [role=button]") as HTMLElement | null ?? el).click();
+        return true;
+      }, source)
+      .catch(() => false);
+    if (ok) return true;
+  }
+  return false;
+}
+
+/** Attend que des dates ou des montants s'affichent (les iframes se remplissent après le menu). */
+export async function attendreContenu(page: Page, ms = 8_000) {
+  const fin = Date.now() + ms;
+  while (Date.now() < fin) {
+    if (/\d{2}\/\d{2}\/\d{2,4}|\d,\d{2}\s*€/.test(await texteDesCadres(page))) return;
+    await pause(500);
+  }
 }
 
 export const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -331,31 +408,38 @@ export function moisAffiche(texte: string, mois: string, strict = false): boolea
   );
 }
 
-/** Essaie de choisir le mois : URL avec dates, sinon deux champs date visibles. */
+/** Essaie de choisir le mois : URL datée (de la page ou de son iframe), sinon deux champs date visibles. */
 async function choisirMois(page: Page, mois: string, strict = false): Promise<boolean> {
-  // Texte visible + valeurs des champs (sélecteurs de dates) + adresse de la page.
-  const texte = () =>
-    page.evaluate(
-      () => `${document.body.innerText}\n${[...document.querySelectorAll("input")].map((i) => i.value).join("\n")}\n${decodeURIComponent(location.href)}`,
-    );
+  // Texte visible + valeurs des champs (sélecteurs de dates) + adresses, dans tous les cadres.
+  const texte = () => texteDesCadres(page, true);
+  await attendreContenu(page);
   if (moisAffiche(await texte(), mois, strict)) return true;
 
-  const url = urlPourMois(page.url(), mois);
-  if (url) {
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 30_000 }).catch(() => {});
+  // La micro-app intégrée porte souvent la période dans sa propre adresse.
+  for (const f of cadres(page, true)) {
+    const url = urlPourMois(f.url(), mois);
+    if (!url) continue;
+    if (f === page.mainFrame()) await page.goto(url, { waitUntil: "networkidle2", timeout: 30_000 }).catch(() => {});
+    else await f.goto(url, { waitUntil: "networkidle2", timeout: 30_000 }).catch(() => {});
     await calme(page);
+    await attendreContenu(page, 4_000);
     if (moisAffiche(await texte(), mois, strict)) return true;
+    break;
   }
 
   const { debut, fin } = bornesMois(mois);
   const fr = (iso: string) => iso.split("-").reverse().join("/");
-  const champs = await page.$$("input");
-  const dates: { el: (typeof champs)[number]; iso: boolean }[] = [];
-  for (const el of champs) {
-    const info = await el.evaluate((i) => ({ type: i.type, value: i.value, visible: i.offsetParent !== null }));
-    if (!info.visible) continue;
-    if (info.type === "date") dates.push({ el, iso: true });
-    else if (/^\d{2}\/\d{2}\/\d{4}/.test(info.value)) dates.push({ el, iso: false });
+  type Champ = import("puppeteer-core").ElementHandle<HTMLInputElement>;
+  let dates: { el: Champ; iso: boolean }[] = [];
+  for (const f of cadres(page, true)) {
+    dates = [];
+    for (const el of await f.$$<"input">("input").catch(() => [] as Champ[])) {
+      const info = await el.evaluate((i) => ({ type: i.type, value: i.value, visible: i.offsetParent !== null })).catch(() => null);
+      if (!info?.visible) continue;
+      if (info.type === "date") dates.push({ el, iso: true });
+      else if (/^\d{2}\/\d{2}\/\d{4}/.test(info.value)) dates.push({ el, iso: false });
+    }
+    if (dates.length >= 2) break;
   }
   if (dates.length >= 2) {
     const pairs = [
@@ -368,8 +452,9 @@ async function choisirMois(page: Page, mois: string, strict = false): Promise<bo
       await el.press("Enter");
     }
     await page.keyboard.press("Escape").catch(() => {});
-    await cliquerTexte(page, "^(valider|appliquer|rechercher|ok)$");
+    await cliquerTexte(page, "^(valider|appliquer|rechercher|ok)$", true);
     await calme(page);
+    await attendreContenu(page, 4_000);
     if (moisAffiche(await texte(), mois, strict)) return true;
   }
   return false;
@@ -405,9 +490,9 @@ async function parExport(page: Page, mois: string): Promise<{ chiffres: Chiffres
     cdp.on("Browser.downloadProgress", (e) => (termine ||= e.state === "completed"));
     await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dossier, eventsEnabled: true });
 
-    if (!(await cliquerTexte(page, "^(exporter|export|t[ée]l[ée]charger|excel)\\b"))) return { note: "bouton d'export introuvable" };
+    if (!(await cliquerTexte(page, "^(exporter|export|t[ée]l[ée]charger|excel)\\b", true))) return { note: "bouton d'export introuvable" };
     await pause(800);
-    await cliquerTexte(page, "^(excel|xlsx|format excel|exporter en excel)$");
+    await cliquerTexte(page, "^(excel|xlsx|format excel|exporter en excel)$", true);
 
     // Chrome peut enregistrer le fichier sous un autre nom : le nom d'origine (avec la période) vient de l'événement.
     for (let i = 0; i < 50 && !recu; i++) {
@@ -450,7 +535,10 @@ export async function extraireMois(opts: {
     await page.setExtraHTTPHeaders({ "accept-language": "fr-FR,fr;q=0.9" });
     page.on("response", (r) => {
       const t = r.request().resourceType();
-      if (t === "xhr" || t === "fetch") appels.push(`${r.request().method()} ${r.status()} ${urlSansSecret(r.url())}`);
+      if (t !== "xhr" && t !== "fetch") return;
+      // Filtres envoyés aux API de rapports (dates, établissement), jamais les identifiants.
+      const corps = /^https?:\/\/reporting[\w-]*\.laddition\.com\//.test(r.url()) ? resumeCorps(r.request().postData()) : "";
+      appels.push(`${r.request().method()} ${r.status()} ${urlSansSecret(r.url())}${corps ? ` ${corps}` : ""}`);
     });
 
     await connexion(page, opts.identifiant, opts.motDePasse, appels);
@@ -479,7 +567,7 @@ export async function extraireMois(opts: {
     await calme(page);
 
     const periodeConfirmee = await choisirMois(page, opts.mois);
-    const texte = await page.evaluate(() => document.body.innerText);
+    const texte = await texteDesCadres(page);
     return {
       chiffres: extraireChiffres(texte),
       periodeConfirmee,
