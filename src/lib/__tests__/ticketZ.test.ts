@@ -99,3 +99,17 @@ describe("triangulation Uber", () => {
     expect(pire("ok", "ok")).toBe("ok");
   });
 });
+
+describe("semaine Uber du récap mail", () => {
+  const jours = Array.from({ length: 7 }, (_, i) => ({ id: `${i}`, date: `2026-11-0${i + 2}`, amount: 10000 }));
+  it("utilise la période debut/fin du mail", () => {
+    const v = { id: "mail-2026-11-09", date: "2026-11-09", montant: 52000, brut: 70000, debut: "2026-11-02", fin: "2026-11-08" };
+    const r = comparerUber("2026-11-04", jours, [v], { today: "2026-11-10" });
+    expect(r).toMatchObject({ statut: "ok", versement: { id: "mail-2026-11-09" } });
+  });
+  it("petit écart (commandes après minuit) → proche, gros écart → écart", () => {
+    const v = (brut: number) => [{ id: "v", date: "2026-11-09", montant: 52000, brut, debut: "2026-11-02", fin: "2026-11-08" }];
+    expect(comparerUber("2026-11-04", jours, v(68500), { today: "2026-11-10" }).statut).toBe("proche");
+    expect(comparerUber("2026-11-04", jours, v(60000), { today: "2026-11-10" }).statut).toBe("ecart");
+  });
+});
