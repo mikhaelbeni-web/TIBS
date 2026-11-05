@@ -2,12 +2,14 @@
 
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
+import { LadditionCa, useCaMensuel } from "@/components/Laddition";
 import { Button, Card, ErrorBox, Field, Input, PageHeader, Select } from "@/components/ui";
 import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
 import { formatEuros } from "@/lib/money";
 import type { AppSettings, CashEntry, Invoice } from "@/lib/types";
-import { echeanceDuMois, prochaineEcheanceTva, tvaReport } from "@/lib/tva";
+import { montantFr } from "@/lib/laddition";
+import { echeanceDuMois, prochaineEcheanceTva, TAUX, tvaFromTtc, tvaReport } from "@/lib/tva";
 import { useCollection } from "@/lib/useCollection";
 
 type Periode = "mois" | "trimestre" | "libre";
@@ -52,7 +54,21 @@ export default function TvaPage() {
     return { from: `${mois}-01`, to: lastDay(mois) };
   }, [periode, mois, libreFrom, libreTo]);
 
-  const r = useMemo(() => tvaReport(cash.items, invoices.items, from, to), [cash.items, invoices.items, from, to]);
+  const caMensuel = useCaMensuel();
+  const ca = periode === "mois" ? caMensuel.data[mois] : undefined;
+
+  const r = useMemo(() => {
+    const base = tvaReport(cash.items, invoices.items, from, to);
+    if (!ca) return base;
+    // Mois relevé dans L'Addition : la caisse fait foi pour la TVA collectée.
+    const collectee = TAUX.map(({ key, label, rate }) => {
+      const ttc = ca[key];
+      const tva = tvaFromTtc(ttc, rate);
+      return { label, rate, ttc, ht: ttc - tva, tva };
+    });
+    const totalCollectee = collectee.reduce((t, l) => t + l.tva, 0);
+    return { ...base, collectee, totalCollectee, nonVentile: { jours: [], montant: 0 }, net: totalCollectee - base.deductible };
+  }, [cash.items, invoices.items, from, to, ca]);
   const label = `du ${fr(from)} au ${fr(to)}`;
   const echeance = prochaineEcheanceTva(today());
   const envoiMois = periode === "mois" ? settings.tvaEnvois?.[mois] : undefined;
@@ -101,6 +117,16 @@ export default function TvaPage() {
     const body = [
       `Bonjour${settings.comptableNom ? " " + settings.comptableNom : ""},`,
       "",
+      ...(ca
+        ? [
+            `Voici les chiffres de caisse (L'Addition) du restaurant Le Tib's ${label} :`,
+            `- CA TTC net : ${montantFr(ca.caTtcNet)} €`,
+            `- TTC 10 % : ${montantFr(ca.ttc10)} €`,
+            `- TTC 20 % : ${montantFr(ca.ttc20)} €`,
+            `- TTC 5,5 % : ${montantFr(ca.ttc55)} €`,
+            "",
+          ]
+        : []),
       `Voici les éléments de TVA du restaurant Le Tib's ${label} :`,
       ...r.collectee.filter((l) => l.ttc).map((l) => `- Ventes à ${l.label} : ${formatEuros(l.ttc)} TTC, TVA ${formatEuros(l.tva)}`),
       `- TVA collectée : ${formatEuros(r.totalCollectee)}`,
@@ -172,7 +198,9 @@ export default function TvaPage() {
         </Card>
       )}
 
-      <ErrorBox message={cash.error || invoices.error || error} />
+      {periode === "mois" && <LadditionCa mois={mois} ca={ca} />}
+
+      <ErrorBox message={cash.error || invoices.error || caMensuel.error || error} />
 
       {r.nonVentile.jours.length > 0 && (
         <p className="mb-4 rounded-control bg-warning-soft p-3 text-sm text-warning">
