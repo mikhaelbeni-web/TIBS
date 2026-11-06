@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     const relu = await relireIncomplets(rid, { budgetMs: 270_000, force: true, ...(id ? { ids: [id] } : {}) });
     if (relu.status === "erreur") return Response.json({ error: relu.message ?? "Lecture impossible.", relu }, { status: 502 });
     // Fiche ouverte par le gérant : on la laisse sous ses yeux.
-    const auto = await validerAutomatiquement(rid, { sauf: id ? [id] : [] });
+    const auto = await validerAutomatiquement(rid, { sauf: id ? [id] : [], force: true });
     return Response.json({ status: "ok", relu, auto });
   }
 
@@ -38,6 +38,6 @@ export async function POST(request: Request) {
   if (r.status === "erreur") return Response.json(r, { status: 502 });
   const relu = r.status === "ok" ? await relireIncomplets(rid, { budgetMs: Math.max(0, 250_000 - (Date.now() - started)) }) : undefined;
   // Factures dont la lecture est cohérente : enregistrées sans clic (nouvelles et arriéré).
-  const auto = await validerAutomatiquement(rid);
+  const auto = await validerAutomatiquement(rid, { force: true });
   return Response.json({ ...r, relu, auto });
 }

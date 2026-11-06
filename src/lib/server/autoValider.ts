@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import { doutesFacture, factureAutoId, nomDansLeMail, type Doute } from "@/lib/autoValidation";
 import type { InboxFacture } from "@/lib/ingest";
@@ -10,6 +11,8 @@ import { adminDb } from "@/lib/server/admin";
 export interface AutoResult {
   valides: number;
   enDoute: number;
+  /** Lignes en attente identiques au passage précédent : rien n'a été relu. */
+  inchange?: boolean;
   /** Pièces que l'IA a jugées « pas une facture », rangées dans les lignes ignorées. */
   ignores?: number;
   /** Nombre de factures en attente par raison (une facture peut en avoir plusieurs). */
@@ -52,7 +55,7 @@ export function fournisseurDeLExpediteur(
  * les autres restent en attente avec leurs doutes (champ `doutes`, affiché dans la liste).
  * `sauf` : éléments que le gérant a ouverts (relecture d'une seule fiche), laissés tels quels.
  */
-export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: { sauf?: string[] } = {}): Promise<AutoResult> {
+export async function validerAutomatiquement(rid: RestaurantId, { sauf = [], force = false }: { sauf?: string[]; force?: boolean } = {}): Promise<AutoResult> {
   const db = adminDb();
   const home = db.doc(`restaurants/${rid}`);
   const out: AutoResult = { valides: 0, enDoute: 0 };
@@ -62,6 +65,17 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
   const pending = await home.collection("inbox").where("statut", "==", "a_verifier").get();
   const factures = pending.docs.filter((d) => d.get("item.kind") === "facture" && !sauf.includes(d.id));
   if (!factures.length) return out;
+  // Lignes en attente inchangées depuis le dernier passage (et autant de factures) : même résultat, on ne relit rien de plus.
+  const statusRef = home.collection("settings").doc("mail");
+  const [nbFactures, statusSnap] = await Promise.all([home.collection("invoices").count().get(), statusRef.get()]);
+  const signature = [
+    nbFactures.data().count,
+    ...factures.map((d) => `${d.id}:${d.get("relu") ?? ""}:${d.get("contreLu") ?? ""}:${d.get("remiseAVerifier") ? 1 : 0}:${d.get("item.montantTTC") ?? ""}`).sort(),
+  ].join("|");
+  const sortis = new Set<string>();
+  const empreinte = createHash("sha1").update(signature).digest("hex");
+  const precedent = statusSnap.get("autoValidation") as { empreinte?: string; enDoute?: number; raisons?: AutoResult["raisons"] } | undefined;
+  if (!force && !sauf.length && precedent?.empreinte === empreinte) return { valides: 0, enDoute: precedent.enDoute ?? factures.length, ...(precedent.raisons ? { raisons: precedent.raisons } : {}), inchange: true };
   const [suppliersSnap, invoicesSnap, traites, ...statuts] = await Promise.all([
     home.collection("suppliers").get(),
     home.collection("invoices").get(),
@@ -89,6 +103,7 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
     if (item.lecture === "pas_facture" && d.get("remiseAVerifier") !== true) {
       await d.ref.update({ statut: "rejete", traiteLe: Date.now(), auto: true, doutes: FieldValue.delete() });
       out.ignores = (out.ignores ?? 0) + 1;
+      sortis.add(d.id);
       continue;
     }
     const nom = low(item.fournisseur);
@@ -183,9 +198,18 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
       });
     if (ok) {
       out.valides++;
+      sortis.add(d.id);
       invoices.push({ supplierId: fiche?.id ?? "", nom, numero, date: item.dateFacture ?? "", ttc: item.montantTTC! });
     }
   }
+  // Empreinte après ce passage (les lignes validées ou ignorées sont sorties de l'attente).
+  const apres = factures.filter((d) => !sortis.has(d.id));
+  const sigApres = [
+    nbFactures.data().count + out.valides,
+    ...apres.map((d) => `${d.id}:${d.get("relu") ?? ""}:${d.get("contreLu") ?? ""}:${d.get("remiseAVerifier") ? 1 : 0}:${d.get("item.montantTTC") ?? ""}`).sort(),
+  ].join("|");
+  if (!sauf.length)
+    await statusRef.set({ autoValidation: { empreinte: createHash("sha1").update(sigApres).digest("hex"), enDoute: out.enDoute, raisons: out.raisons ?? {}, le: Date.now() } }, { merge: true });
   if (out.exemples?.length) console.log(`auto-validation ${rid} doutes:`, JSON.stringify(out.exemples));
   delete out.exemples;
   return out;
