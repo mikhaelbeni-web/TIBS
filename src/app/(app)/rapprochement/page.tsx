@@ -11,7 +11,7 @@ import { useRestaurant } from "@/components/RestaurantProvider";
 import { lignesXlsx, lireExportServices } from "@/lib/ladditionExport";
 import { db } from "@/lib/firebase";
 import { readSpreadsheet, rowToBank } from "@/lib/importer";
-import { sansDoublonsImport } from "@/lib/banque";
+import { apparierImports, sansDoublonsImport } from "@/lib/banque";
 import { formatEuros, toCents } from "@/lib/money";
 import { reconcile, reconcileDeposits, type BankLine, type CashLine } from "@/lib/reconcile";
 import type { BankTransaction, CashEntry, UberJourDoc, UberPayout, WithId } from "@/lib/types";
@@ -269,8 +269,17 @@ export default function RapprochementPage() {
         }
         await batch.commit();
       }
+      // La banque n'envoie pas la date de valeur par le relevé automatique : le fichier la donne aux opérations déjà
+      // présentes (même montant, même jour à un jour près). Elle sert à rattacher les remises CB du matin à la veille.
+      const sansValeur = bank.items.filter((b) => b.source === "banque" && !b.valeur).map((b) => ({ id: b.id, date: b.date, montant: b.montant, libelle: b.libelle }));
+      const valeurs = [...apparierImports(lues.filter((r) => r.valeur), sansValeur, 1)];
+      for (let i = 0; i < valeurs.length; i += 450) {
+        const batch = writeBatch(db());
+        for (const [id, r] of valeurs.slice(i, i + 450)) batch.update(doc(db(), "restaurants", rid, "bankTransactions", id), { valeur: r.valeur });
+        await batch.commit();
+      }
       setInfo(
-        `${rows.length} opération(s) bancaire(s) importée(s). Les doublons d'un précédent import sont ignorés.${dejaReleves ? ` ${dejaReleves} déjà présente(s) grâce au relevé automatique.` : ""}`,
+        `${rows.length} opération(s) bancaire(s) importée(s). Les doublons d'un précédent import sont ignorés.${dejaReleves ? ` ${dejaReleves} déjà présente(s) grâce au relevé automatique.` : ""}${valeurs.length ? ` Date de valeur ajoutée à ${valeurs.length} opération(s).` : ""}`,
       );
     } catch (e) {
       setOpError((e as Error).message);
