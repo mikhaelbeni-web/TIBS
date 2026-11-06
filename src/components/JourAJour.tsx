@@ -310,7 +310,9 @@ export function JourAJour({
                         <Ligne label={b.libelle.slice(0, 34)}>{formatEuros(b.amount)}</Ligne>
                         {b.valeur && b.valeur < b.date && (
                           <p className="text-xs text-muted">
-                            Créditée le {fr(b.date)} avec une date de valeur au {fr(b.valeur)} : lot envoyé le matin, ventes de la veille.
+                            {b.valeurDeduite
+                              ? `Créditée le ${fr(b.date)} : lot envoyé le matin par le TPE, ventes de la veille (reconnu aux montants, la banque ne donne pas la date de valeur).`
+                              : `Créditée le ${fr(b.date)} avec une date de valeur au ${fr(b.valeur)} : lot envoyé le matin, ventes de la veille.`}
                           </p>
                         )}
                       </div>
@@ -339,7 +341,8 @@ export function JourAJour({
                     {cb.cumul && <Ligne label={`Écart cumulé depuis le ${fr(cb.cumul.depuis)}`}>{formatEuros(cb.cumul.ecart)}</Ligne>}
                     <p className="text-xs text-muted">
                       Les CB d&apos;une journée sont créditées le jour bancaire suivant (samedi soir et dimanche : le lundi). Une remise créditée un jour plus tard
-                      avec une date de valeur antérieure revient au service de la veille. La date dans le libellé est celle de l&apos;envoi par le TPE.
+                      avec une date de valeur antérieure revient au service de la veille ; sans cette date, ce lot du matin est retrouvé par les montants. La
+                      date dans le libellé est celle de l&apos;envoi par le TPE.
                     </p>
                   </>
                 ) : (
