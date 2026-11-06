@@ -1,7 +1,7 @@
 "use client";
 
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { clearIndexedDbPersistence, doc, getDoc, terminate } from "firebase/firestore";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { auth, db, firebaseApp, initAnalytics } from "@/lib/firebase";
 import type { Role } from "@/lib/types";
@@ -48,8 +48,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, [configError]);
 
+  // Les données lues restent dans le navigateur (cache Firestore) : effacées à la déconnexion, puis page rechargée.
+  const logout = async () => {
+    await signOut(auth());
+    try {
+      await terminate(db());
+      await clearIndexedDbPersistence(db());
+    } catch {
+      // Cache déjà absent ou bloqué : la déconnexion reste faite.
+    }
+    window.location.reload();
+  };
+
   return (
-    <AuthContext.Provider value={{ ...state, logout: () => signOut(auth()) }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ ...state, logout }}>{children}</AuthContext.Provider>
   );
 }
 
