@@ -1,7 +1,7 @@
 "use client";
 
 import { deleteDoc, doc, getDoc, setDoc, writeBatch } from "firebase/firestore";
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { Suspense, useMemo, useRef, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
 import { BanqueCard } from "@/components/BanqueCard";
 import { JourAJour } from "@/components/JourAJour";
@@ -377,14 +377,17 @@ export default function RapprochementPage() {
       {cash.loading || bank.loading || uber.loading || uberJours.loading ? (
         <p className="text-muted">Chargement…</p>
       ) : tab === "jour" ? (
-        <JourAJour
-          cash={cash.items}
-          bank={bank.items}
-          uber={uber.items}
-          uberJours={uberJours.items}
-          maxFee={Number(maxFee.replace(",", ".")) || 0}
-          maxDays={Number(maxDays) || 5}
-        />
+        // Suspense : « Jour à jour » lit ?jour=AAAA-MM-JJ (lien « À regarder » de l'accueil).
+        <Suspense fallback={<p className="text-muted">Chargement…</p>}>
+          <JourAJour
+            cash={cash.items}
+            bank={bank.items}
+            uber={uber.items}
+            uberJours={uberJours.items}
+            maxFee={Number(maxFee.replace(",", ".")) || 0}
+            maxDays={Number(maxDays) || 5}
+          />
+        </Suspense>
       ) : tab === "cb" ? (
         <div className="space-y-4">
           {days.length === 0 && <Empty>Aucune journée de caisse ce mois-ci. Importez votre export ou ajoutez une journée.</Empty>}

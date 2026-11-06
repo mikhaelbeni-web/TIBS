@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
+import { ListeIncoherences, useIncoherences } from "@/components/Incoherences";
 import { Card, PageHeader } from "@/components/ui";
 import { checkDpae } from "@/lib/dpae";
 import { formatEuros } from "@/lib/money";
@@ -56,6 +57,7 @@ export default function Dashboard() {
     return { count: open.length, total: open.reduce((s, i) => s + i.montantTTC, 0) };
   }, [invoices.items]);
   const monthCash = cash.items.filter((c) => c.date.startsWith(mois));
+  const incoherences = useIncoherences();
 
   const tiles = [
     {
@@ -99,6 +101,8 @@ export default function Dashboard() {
   return (
     <div>
       <PageHeader title="Tableau de bord" />
+      {/* Les incohérences d'abord : c'est ce qu'il faut regarder en ouvrant l'app. */}
+      <ListeIncoherences data={incoherences} />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {tiles.map((t) => (
           <Link key={t.href} href={t.href}>

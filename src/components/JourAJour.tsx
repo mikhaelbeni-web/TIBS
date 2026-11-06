@@ -1,6 +1,7 @@
 "use client";
 
 import { doc, onSnapshot } from "firebase/firestore";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { useRestaurant } from "@/components/RestaurantProvider";
@@ -102,7 +103,9 @@ export function JourAJour({
       ),
     [rid],
   );
-  const [jour, setJour] = useState(hier());
+  // Lien « À regarder » de l'accueil : /rapprochement?jour=AAAA-MM-JJ ouvre cette journée.
+  const lien = useSearchParams().get("jour");
+  const [jour, setJour] = useState(lien && /^\d{4}-\d{2}-\d{2}$/.test(lien) ? lien : hier());
   const [lecture, setLecture] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
