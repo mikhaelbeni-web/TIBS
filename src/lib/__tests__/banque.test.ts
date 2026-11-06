@@ -53,7 +53,13 @@ describe("banque DSP2", () => {
         { date: "2026-10-22", montant: 40000, libelle: "CB TIB S 211026" },
         { date: "2026-10-22", montant: -150, libelle: "CB COM TIB S 211026", valeur: "2026-10-21" },
       ]),
-    ).toEqual({ remises: 3, avecValeur: 2, valeurAvant: 1, valeurApres: 1 });
+    ).toMatchObject({ remises: 3, avecValeur: 2, valeurAvant: 1, valeurApres: 1 });
+    expect(
+      compterValeurs([
+        { date: "2026-10-21", montant: 16205, libelle: "CB TIB S 201026 CONTRAT 1 REM 018820", transaction: "2026-10-20" },
+        { date: "2026-10-24", montant: 27750, libelle: "CB TIB S 231026", transaction: "2026-10-24" },
+      ]),
+    ).toMatchObject({ avecRem: 1, transactionMoinsDate: { "-1": 1, "0": 1 }, libelleMoinsDate: { "-1": 2 } });
   });
 
   it("ignore les opérations en attente", () => {

@@ -29,6 +29,8 @@ export interface LigneBanque {
   ref: string;
   /** Date de valeur (AAAA-MM-JJ). Une remise CB dont la valeur précède le crédit appartient au service de la veille. */
   valeur?: string;
+  /** transaction_date de l'API, si la banque la donne (sens à confirmer par banque, non enregistré). */
+  transaction?: string;
 }
 
 const ISO = /^\d{4}-\d{2}-\d{2}/;
@@ -61,7 +63,8 @@ export function versLigne(t: EbTransaction): Omit<LigneBanque, "ref"> & { ref?: 
     "Opération";
   const ref = t.entry_reference || t.transaction_id || undefined;
   const valeur = t.value_date && ISO.test(t.value_date) ? t.value_date.slice(0, 10) : undefined;
-  return { date, libelle, montant, ref: ref ?? undefined, ...(valeur ? { valeur } : {}) };
+  const transaction = t.transaction_date && ISO.test(t.transaction_date) ? t.transaction_date.slice(0, 10) : undefined;
+  return { date, libelle, montant, ref: ref ?? undefined, ...(valeur ? { valeur } : {}), ...(transaction ? { transaction } : {}) };
 }
 
 /** Empreinte courte et stable (deux hachages 32 bits FNV-1a et djb2, en base 36), pour fabriquer des identifiants de document. */
@@ -125,14 +128,38 @@ export function apparierImports<
   return out;
 }
 
-/** Remises CB du relevé : combien ont une date de valeur, et combien la portent avant ou après le jour de crédit. */
-export function compterValeurs(lignes: { date: string; montant: number; libelle: string; valeur?: string }[]) {
+const jours = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+
+/**
+ * Remises CB du relevé : combien ont une date de valeur, et combien la portent avant ou après le jour de crédit.
+ * Pour comprendre ce que la banque envoie, sans montant : écart en jours entre transaction_date (ou la date du libellé
+ * « JJMMAA ») et la date de la ligne, et présence du n° de remise (« REM 123456 ») dans le libellé.
+ */
+export function compterValeurs(lignes: { date: string; montant: number; libelle: string; valeur?: string; transaction?: string }[]) {
   const remises = lignes.filter((l) => l.montant > 0 && REMISE_CB.test(l.libelle));
+  const histo = (f: (l: (typeof remises)[number]) => number | undefined) => {
+    const h: Record<string, number> = {};
+    for (const l of remises) {
+      const d = f(l);
+      if (d !== undefined && Number.isFinite(d)) h[String(d)] = (h[String(d)] ?? 0) + 1;
+    }
+    return h;
+  };
+  const dateLibelle = (s: string) => {
+    const m = s.match(/\b(\d{2})(\d{2})(\d{2})\b/);
+    return m ? `20${m[3]}-${m[2]}-${m[1]}` : undefined;
+  };
   return {
     remises: remises.length,
     avecValeur: remises.filter((l) => l.valeur).length,
     valeurAvant: remises.filter((l) => l.valeur && l.valeur < l.date).length,
     valeurApres: remises.filter((l) => l.valeur && l.valeur > l.date).length,
+    avecRem: remises.filter((l) => /\bREM\s*\d{6}\b/i.test(l.libelle)).length,
+    transactionMoinsDate: histo((l) => (l.transaction ? jours(l.date, l.transaction) : undefined)),
+    libelleMoinsDate: histo((l) => {
+      const d = dateLibelle(l.libelle);
+      return d ? jours(l.date, d) : undefined;
+    }),
   };
 }
 
