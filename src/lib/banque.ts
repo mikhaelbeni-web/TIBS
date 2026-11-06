@@ -105,12 +105,14 @@ export function lignesDuCompte(compte: string, txs: EbTransaction[]): (LigneBanq
  * près, la plus proche ; chaque opération ne sert qu'une fois). Sert à compléter la date de valeur des anciens imports.
  */
 export function apparierImports<
-  T extends { date: string; montant: number; libelle?: string },
-  I extends { id: string; date: string; montant: number; libelle?: string },
+  T extends { date: string; montant: number; libelle?: string; details?: string },
+  I extends { id: string; date: string; montant: number; libelle?: string; details?: string },
 >(lignes: T[], importees: I[], toleranceJours = 3): Map<string, T> {
   const jour = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
   // Deux remises de même montant à 3 jours d'écart : la date du libellé (« CB TIB S 301026 ») départage.
   const code = (s?: string) => s?.match(/\b\d{6}\b/)?.[0];
+  // Le n° de remise (« REM 087792 », dans le libellé de l'API ou les informations complémentaires du fichier) tranche.
+  const rem = (x: { libelle?: string; details?: string }) => `${x.libelle ?? ""} ${x.details ?? ""}`.match(/\bREM\s*(\d{6})\b/i)?.[1];
   const distance = (l: T, i: I) => Math.abs(jour(l.date) - jour(i.date)) + (code(l.libelle) === code(i.libelle) ? 0 : 0.5);
   const libres = new Set(lignes.keys());
   const out = new Map<string, T>();
@@ -119,6 +121,9 @@ export function apparierImports<
     for (const k of libres) {
       const l = lignes[k];
       if (l.montant !== i.montant || Math.abs(jour(l.date) - jour(i.date)) > toleranceJours) continue;
+      const rl = rem(l);
+      const ri = rem(i);
+      if (rl && ri && rl !== ri) continue;
       if (best < 0 || distance(l, i) < distance(lignes[best], i)) best = k;
     }
     if (best < 0) continue;

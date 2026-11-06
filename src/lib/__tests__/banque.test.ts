@@ -45,6 +45,20 @@ describe("banque DSP2", () => {
     expect(m.has("i3")).toBe(false);
   });
 
+  it("le n° de remise départage deux remises de même montant le même jour", () => {
+    const fichier = [
+      { date: "2026-10-07", montant: 4650, libelle: "CB TIB S 061026", details: "CONTRAT 8060565 REM 085223", valeur: "2026-10-06" },
+      { date: "2026-10-07", montant: 4650, libelle: "CB TIB S 061026", details: "CONTRAT 8060565 REM 028946", valeur: "2026-10-07" },
+    ];
+    const api = [
+      { id: "a", date: "2026-10-07", montant: 4650, libelle: "CB TIB S 061026 CONTRAT 8060565 REM 028946" },
+      { id: "b", date: "2026-10-07", montant: 4650, libelle: "CB TIB S 061026 CONTRAT 8060565 REM 085223" },
+    ];
+    const m = apparierImports(fichier, api, 1);
+    expect(m.get("a")?.valeur).toBe("2026-10-07");
+    expect(m.get("b")?.valeur).toBe("2026-10-06");
+  });
+
   it("compte les remises CB selon leur date de valeur, sans montant", () => {
     expect(
       compterValeurs([
