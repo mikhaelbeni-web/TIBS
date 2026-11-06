@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { rowsToUberJours } from "../cashImport";
-import { categorie, comparerCB, comparerUber, comparerUberJour, controleTotal, estRemiseCB, jourDuTicket, semaineUber, totaux } from "../ticketZ";
+import { bilanCB } from "../controleCB";
+import { categorie, comparerCB, comparerUber, comparerUberJour, controleTotal, creditEffectif, estRemiseCB, jourDuTicket, semaineUber, totaux } from "../ticketZ";
 
 describe("ticket Z", () => {
   it("un Z clôturé après minuit appartient à la veille", () => {
@@ -157,7 +158,8 @@ describe("remises CB Caisse d'Épargne", () => {
   });
   it("une journée = remises créditées le jour bancaire suivant, quelle que soit la date du libellé", () => {
     expect(cb("2026-10-16")).toMatchObject({ statut: "ok", caisse: 30000, ecart: 0, banque: { date: "2026-10-17", montant: 30000, jours: 1 } });
-    expect(cb("2026-10-15")).toMatchObject({ statut: "ecart", banque: { date: "2026-10-16", montant: 97575 }, ecart: -2425 });
+    // Petit manque en banque : CB saisie en caisse sans remise CB, à vérifier mais pas une alerte.
+    expect(cb("2026-10-15")).toMatchObject({ statut: "proche", sansRemise: true, banque: { date: "2026-10-16", montant: 97575 }, ecart: -2425 });
   });
   it("samedi soir et dimanche sont crédités ensemble le lundi", () => {
     const r = cb("2026-10-18");
@@ -213,14 +215,79 @@ describe("remises CB : lot envoyé en retard, cumul à cheval sur deux mois", ()
   it("excédent égal au centime à une remise : envoyée en retard, signalée", () => {
     expect(cb("2026-11-02")).toMatchObject({ statut: "proche", ecart: 25000, remiseExacte: { sens: "excedent", remise: { amount: 25000 } } });
   });
-  it("écarts sans remise correspondante restent des écarts ; cumul depuis le 02/11", () => {
-    expect(cb("2026-11-03")).toMatchObject({ statut: "ecart", ecart: -5000 });
+  it("excédent sans remise correspondante reste un écart, petit manque signalé ; cumul depuis le 02/11", () => {
+    expect(cb("2026-11-03")).toMatchObject({ statut: "proche", ecart: -5000, sansRemise: true });
     expect(cb("2026-11-04")).toMatchObject({ statut: "ecart", ecart: 3333, cumul: { depuis: "2026-11-02", caisse: 480000, banque: 503333, ecart: 23333 } });
   });
   it("montant manquant retrouvé au centime dans le crédit suivant", () => {
     const tard = [...lignes, { id: "tard", date: "2026-11-05", amount: 5000, libelle: "CB TIB S 041126 CONTRAT 1234567" }];
     const r = comparerCB("2026-11-03", caisse, tard, { today: "2026-11-06" });
     expect(r).toMatchObject({ statut: "proche", remiseExacte: { sens: "manquant", remise: { id: "tard", date: "2026-11-05" } } });
+  });
+});
+
+describe("remises CB : date de valeur", () => {
+  // Lundi 100 000, mardi 80 000. Un lot de 5 000 du lundi soir est télécollecté le mardi matin : crédité mercredi,
+  // valeur mardi. Sans la date de valeur, lundi -50 € et mardi +50 €.
+  const base = [
+    ...remisesCB([
+      ["2026-10-20", "191026", [60000, 35000]],
+      ["2026-10-21", "201026", [80000]],
+    ]),
+    { id: "matin", date: "2026-10-21", amount: 5000, libelle: "CB TIB S 201026 CONTRAT 1234565" },
+  ];
+  const avecValeur = base.map((b) => ({ ...b, valeur: b.id === "matin" ? "2026-10-20" : b.date }));
+  const caisse = journees([
+    ["2026-10-19", 100000],
+    ["2026-10-20", 80000],
+  ]);
+  const cb = (jour: string, lignes: typeof base) => comparerCB(jour, caisse, lignes, { today: "2026-11-06" });
+
+  it("une remise dont la valeur précède le crédit revient au service de la veille", () => {
+    expect(creditEffectif(avecValeur[3])).toBe("2026-10-20");
+    expect(cb("2026-10-19", avecValeur)).toMatchObject({ statut: "ok", ecart: 0, banque: { date: "2026-10-20", montant: 100000 } });
+    expect(cb("2026-10-20", avecValeur)).toMatchObject({ statut: "ok", ecart: 0, banque: { date: "2026-10-21", montant: 80000 } });
+    expect(cb("2026-10-19", avecValeur).remises?.map((b) => b.id)).toContain("matin");
+  });
+  it("sans date de valeur, le même lot se voit seulement par compensation entre les deux jours", () => {
+    expect(cb("2026-10-19", base)).toMatchObject({ statut: "proche", ecart: -5000 });
+    expect(cb("2026-10-20", base)).toMatchObject({ statut: "proche", ecart: 5000, voisin: { credit: "2026-10-20" } });
+  });
+  it("une valeur postérieure au crédit (lot du vendredi, valeur lundi) ne change rien", () => {
+    const ven = remisesCB([["2026-10-24", "231026", [27750]]]).map((b) => ({ ...b, valeur: "2026-10-26" }));
+    const r = comparerCB("2026-10-23", journees([["2026-10-23", 27750]]), ven, { today: "2026-11-06" });
+    expect(r).toMatchObject({ statut: "ok", banque: { date: "2026-10-24" } });
+  });
+  it("seul un petit manque est mis sur le compte d'un paiement sans remise ; un excédent reste un écart", () => {
+    const une = (montant: number) =>
+      comparerCB("2026-10-27", journees([["2026-10-27", 400000]]), remisesCB([["2026-10-28", "271026", [montant]]]), { today: "2026-11-06" });
+    expect(une(400000 - 7350)).toMatchObject({ statut: "proche", sansRemise: true });
+    expect(une(400000 - 20000)).toMatchObject({ statut: "ecart" });
+    expect(une(400000 + 7350).statut).toBe("ecart");
+  });
+});
+
+describe("contrôle d'un mois en compteurs", () => {
+  it("compte les groupes exacts, en plus et en moins, avec et sans date de valeur", () => {
+    const lignes = [
+      ...remisesCB([
+        ["2026-10-20", "191026", [95000]],
+        ["2026-10-21", "201026", [80000]],
+        ["2026-10-22", "211026", [69000]],
+      ]),
+      { id: "matin", date: "2026-10-21", amount: 5000, libelle: "CB TIB S 201026 CONTRAT 1", valeur: "2026-10-20" },
+    ];
+    const caisse = journees([
+      ["2026-10-19", 100000],
+      ["2026-10-20", 80000],
+      ["2026-10-21", 70000],
+      ["2026-10-22", 50000],
+    ]);
+    const b = bilanCB("2026-10", caisse, lignes, "2026-10-23");
+    expect(b.jours).toBe(4);
+    expect(b.avecValeur).toEqual({ groupes: 3, exacts: 2, negatifs: 1, positifs: 0, sansCredit: 1 });
+    expect(b.sansValeur).toEqual({ groupes: 3, exacts: 0, negatifs: 2, positifs: 1, sansCredit: 1 });
+    expect(b.remises).toEqual({ remises: 4, avecValeur: 1, valeurAvant: 1, valeurApres: 0 });
   });
 });
 

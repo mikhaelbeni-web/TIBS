@@ -93,8 +93,8 @@ describe("importer", () => {
     ].join("\r\n");
     const rows = Papa.parse<Record<string, unknown>>(debutTableau(csv), { header: true, skipEmptyLines: true, transformHeader: normalizeHeader }).data;
     expect(rows.map(rowToBank)).toEqual([
-      { date: "2026-10-31", libelle: "CB TIB S 301026", montant: 4650, details: "CONTRAT 1 REM 2", type: "Remise CB" },
-      { date: "2026-10-29", libelle: "PRLV METRO FRANCE S.A.S.-METRO F", montant: -162528, details: "03805-/INV/0053.097421", type: "Prelevement SDD" },
+      { date: "2026-10-31", libelle: "CB TIB S 301026", montant: 4650, details: "CONTRAT 1 REM 2", type: "Remise CB", valeur: "2026-11-02" },
+      { date: "2026-10-29", libelle: "PRLV METRO FRANCE S.A.S.-METRO F", montant: -162528, details: "03805-/INV/0053.097421", type: "Prelevement SDD", valeur: "2026-10-29" },
     ]);
     // Un export sans lignes d'en-tête reste intact.
     expect(debutTableau("date;libelle;montant\n02/10/2026;X;1")).toBe("date;libelle;montant\n02/10/2026;X;1");

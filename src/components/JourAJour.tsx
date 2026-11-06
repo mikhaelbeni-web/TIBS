@@ -119,7 +119,7 @@ export function JourAJour({
     : null;
 
   const toutes: BankLine[] = useMemo(
-    () => bank.map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle })),
+    () => bank.map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle, ...(b.valeur ? { valeur: b.valeur } : {}) })),
     [bank],
   );
   const credits = useMemo(() => toutes.filter((b) => b.amount > 0), [toutes]);
@@ -306,9 +306,14 @@ export function JourAJour({
                   <>
                     <p className="pt-1 text-xs font-medium text-muted">Remises CB créditées le {fr(cb.banque.date)}</p>
                     {cb.remises.map((b) => (
-                      <Ligne key={b.id} label={b.libelle.slice(0, 34)}>
-                        {formatEuros(b.amount)}
-                      </Ligne>
+                      <div key={b.id}>
+                        <Ligne label={b.libelle.slice(0, 34)}>{formatEuros(b.amount)}</Ligne>
+                        {b.valeur && b.valeur < b.date && (
+                          <p className="text-xs text-muted">
+                            Créditée le {fr(b.date)} avec une date de valeur au {fr(b.valeur)} : lot envoyé le matin, ventes de la veille.
+                          </p>
+                        )}
+                      </div>
                     ))}
                     {cb.remises.length > 1 && <Ligne label="Total des remises">{formatEuros(cb.banque.montant)}</Ligne>}
                     <Ligne label="Écart">{formatEuros(cb.ecart ?? 0)}</Ligne>
@@ -324,10 +329,17 @@ export function JourAJour({
                           : `La remise de ${formatEuros(cb.remiseExacte.remise.amount)} (${cb.remiseExacte.remise.libelle.slice(0, 34)}) a exactement le montant de l'excédent : elle contient sans doute des paiements de la journée précédente, envoyés en retard.`}
                       </p>
                     )}
+                    {cb.sansRemise && (
+                      <p className="text-xs text-muted">
+                        Il manque {formatEuros(-(cb.ecart ?? 0))} en remise CB : un paiement saisi « CB » en caisse n&apos;est pas passé en remise CB. Causes
+                        possibles : paiement refusé ou annulé au TPE après validation en caisse, autre mode de paiement saisi en CB, carte titre-restaurant passée
+                        sur le TPE (payée à part par l&apos;émetteur).
+                      </p>
+                    )}
                     {cb.cumul && <Ligne label={`Écart cumulé depuis le ${fr(cb.cumul.depuis)}`}>{formatEuros(cb.cumul.ecart)}</Ligne>}
                     <p className="text-xs text-muted">
-                      Les CB d&apos;une journée sont créditées le jour bancaire suivant (samedi soir et dimanche : le lundi). La date dans le libellé est celle de
-                      l&apos;envoi par le TPE, pas celle du paiement.
+                      Les CB d&apos;une journée sont créditées le jour bancaire suivant (samedi soir et dimanche : le lundi). Une remise créditée un jour plus tard
+                      avec une date de valeur antérieure revient au service de la veille. La date dans le libellé est celle de l&apos;envoi par le TPE.
                     </p>
                   </>
                 ) : (

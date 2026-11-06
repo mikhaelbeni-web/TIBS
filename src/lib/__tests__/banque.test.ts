@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centimes, debutReleve, joursRestants, lignesDuCompte, releveBanqueDu, sansDoublonsImport, trierBanques, versLigne } from "../banque";
+import { apparierImports, centimes, compterValeurs, debutReleve, joursRestants, lignesDuCompte, releveBanqueDu, sansDoublonsImport, trierBanques, versLigne } from "../banque";
 
 describe("banque DSP2", () => {
   it("convertit les montants texte en centimes", () => {
@@ -19,7 +19,41 @@ describe("banque DSP2", () => {
       libelle: "UBER EATS",
       montant: 98000,
       ref: "X1",
+      valeur: "2026-11-04",
     });
+  });
+
+  it("garde la date de valeur à côté de la date comptable", () => {
+    const l = versLigne({ transaction_amount: { amount: "162.05" }, credit_debit_indicator: "CRDT", booking_date: "2026-10-21", value_date: "2026-10-20", remittance_information: ["CB TIB S 201026"] });
+    expect(l).toMatchObject({ date: "2026-10-21", valeur: "2026-10-20" });
+  });
+
+  it("retrouve l'opération de l'API d'une ligne importée, la date du libellé départageant deux montants égaux", () => {
+    const api = [
+      { date: "2026-10-21", montant: 2500, libelle: "CB TIB S 201026 CONTRAT 1", valeur: "2026-10-21" },
+      { date: "2026-10-21", montant: 2500, libelle: "CB TIB S 191026 CONTRAT 1", valeur: "2026-10-20" },
+      { date: "2026-10-21", montant: 900, libelle: "PRLV X", valeur: "2026-10-21" },
+    ];
+    const imports = [
+      { id: "i1", date: "2026-10-21", montant: 2500, libelle: "CB TIB S 191026" },
+      { id: "i2", date: "2026-10-21", montant: 2500, libelle: "CB TIB S 201026" },
+      { id: "i3", date: "2026-10-21", montant: 777, libelle: "AUTRE" },
+    ];
+    const m = apparierImports(api, imports);
+    expect(m.get("i1")).toBe(api[1]);
+    expect(m.get("i2")).toBe(api[0]);
+    expect(m.has("i3")).toBe(false);
+  });
+
+  it("compte les remises CB selon leur date de valeur, sans montant", () => {
+    expect(
+      compterValeurs([
+        { date: "2026-10-21", montant: 16205, libelle: "CB TIB S 201026", valeur: "2026-10-20" },
+        { date: "2026-10-24", montant: 27750, libelle: "CB TIB S 231026", valeur: "2026-10-26" },
+        { date: "2026-10-22", montant: 40000, libelle: "CB TIB S 211026" },
+        { date: "2026-10-22", montant: -150, libelle: "CB COM TIB S 211026", valeur: "2026-10-21" },
+      ]),
+    ).toEqual({ remises: 3, avecValeur: 2, valeurAvant: 1, valeurApres: 1 });
   });
 
   it("ignore les opérations en attente", () => {
