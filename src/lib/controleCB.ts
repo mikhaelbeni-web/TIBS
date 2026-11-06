@@ -1,6 +1,7 @@
 import { compterValeurs } from "./banque";
+import { isCashDeposit, isUber } from "./cashImport";
 import type { BankLine, CashLine } from "./reconcile";
-import { comparerCB, deduireValeurs, estRemiseCB, lotDuMatinPossible, type ComparaisonCB } from "./ticketZ";
+import { comparerCB, deduireValeurs, estRemiseCB, lotDuMatinPossible, pointageMoisCB, type ComparaisonCB } from "./ticketZ";
 
 export interface BilanRegle {
   /** Groupes de crédit (une journée, ou samedi + dimanche) rapprochés. */
@@ -38,6 +39,14 @@ export interface BilanMoisCB {
     joursSansCaisse: string[];
     /** Jours de crédit du mois dont les remises ne couvrent aucune journée de caisse : elles ne sont comparées à rien. */
     creditsSansCaisse: string[];
+    /** Crédits du mois par famille, en nombre de lignes : où peut passer la CB qui manque. */
+    familles: Record<Famille, number>;
+    /**
+     * Hypothèse « carte titre-restaurant ou Amex passée au TPE et saisie CB en caisse » : rapport, arrondi à 0,05, entre
+     * leurs virements et le manque CB (petits écarts négatifs, jusqu'à 200 €). Proche de 1 sur plusieurs mois = cause trouvée.
+     * « decale » : virements reçus 7 jours plus tard que les crédits CB comparés (paiement à la semaine).
+     */
+    manque: { tr: number | null; trDecale: number | null; amex: number | null; amexDecale: number | null };
   };
   remises: ReturnType<typeof compterValeurs>;
 }
@@ -99,6 +108,21 @@ function anomalies(groupes: ComparaisonCB[], lignes: BankLine[]): Anomalie[] {
   return out;
 }
 
+export type Famille = "cb" | "uber" | "especes" | "tr" | "amex" | "stripe" | "autre";
+const TITRES = /\b(TRD|CONECS|EDENRED|SWILE|BIMPLI|PLUXEE|SODEXO|APETIZ|UP\s*DEJ|CHEQUE\s*DEJ|TICKET\s*REST|TITRES?\s*REST)/i;
+const AMEX = /AMERICAN\s*EXPRESS|\bAMEX\b/i;
+function famille(b: BankLine): Famille {
+  if (estRemiseCB(b)) return "cb";
+  if (isUber(b.libelle)) return "uber";
+  if (TITRES.test(b.libelle)) return "tr";
+  if (AMEX.test(b.libelle)) return "amex";
+  if (/STRIPE/i.test(b.libelle)) return "stripe";
+  if (isCashDeposit(b.libelle)) return "especes";
+  return "autre";
+}
+const decale = (iso: string, n: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const rapport = (a: number, b: number) => (b > 0 ? Math.round((20 * a) / b) / 20 : null);
+
 const TRANCHES_EUROS = [1, 20, 50, 100, 200, 500];
 const TRANCHES_POURCENTS = [0.5, 1, 2, 3, 5, 10];
 /** « -50 » : écart négatif de 20 à 50 € ; « +inf » : au-delà de la dernière tranche. */
@@ -143,6 +167,7 @@ function compter(
  */
 export function bilanCB(mois: string, cash: CashLine[], lignes: BankLine[], today = new Date().toISOString().slice(0, 10)): BilanMoisCB {
   const sans = lignes.map((b) => ({ id: b.id, date: b.date, amount: b.amount, libelle: b.libelle }));
+  const credits = sans.filter((b) => b.amount > 0);
   const remises = sans.filter(estRemiseCB);
   const deduites = deduireValeurs(cash, remises);
   const duMois = (b: BankLine) => b.date.startsWith(mois);
@@ -161,9 +186,23 @@ export function bilanCB(mois: string, cash: CashLine[], lignes: BankLine[], toda
       pourcents: compte(ecarts.filter((e) => e.caisse > 0).map((e) => tranche((100 * (e.ecart ?? 0)) / e.caisse, TRANCHES_POURCENTS))),
       anomalies: anomalies(ecarts, sans),
       joursSansCaisse: joursDuMois(mois).filter((j) => j < today && !cash.some((c) => c.date === j && c.amount > 0)),
-      creditsSansCaisse: [...new Set(remises.filter(duMois).map((b) => deduites.get(b.id) ?? b.date))]
-        .filter((d) => !ecarts.some((g) => g.banque?.date === d))
-        .sort(),
+      // Remises rattachées à aucune journée, y compris celles des 10 jours d'avant le mois (fin du mois précédent).
+      creditsSansCaisse: [...new Set(pointageMoisCB(mois, cash, credits, { lignes: sans, today }).remisesSeules.map((b) => deduites.get(b.id) ?? b.date))].sort(),
+      familles: credits.filter(duMois).reduce(
+        (o, b) => ((o[famille(b)] += 1), o),
+        { cb: 0, uber: 0, especes: 0, tr: 0, amex: 0, stripe: 0, autre: 0 } as Record<Famille, number>,
+      ),
+      manque: (() => {
+        const petit = -ecarts.reduce((t, g) => t + ((g.ecart ?? 0) < -100 && (g.ecart ?? 0) >= -20000 ? (g.ecart ?? 0) : 0), 0);
+        const somme = (f: Famille, de: string, a: string) => credits.filter((b) => b.date >= de && b.date <= a && famille(b) === f).reduce((t, b) => t + b.amount, 0);
+        const fin = `${mois}-31`;
+        return {
+          tr: rapport(somme("tr", `${mois}-01`, fin), petit),
+          trDecale: rapport(somme("tr", decale(`${mois}-01`, 7), decale(joursDuMois(mois).at(-1)!, 7)), petit),
+          amex: rapport(somme("amex", `${mois}-01`, fin), petit),
+          amexDecale: rapport(somme("amex", decale(`${mois}-01`, 7), decale(joursDuMois(mois).at(-1)!, 7)), petit),
+        };
+      })(),
     },
     remises: compterValeurs(lignes.filter(duMois).map((b) => ({ date: b.date, montant: b.amount, libelle: b.libelle, valeur: b.valeur }))),
   };

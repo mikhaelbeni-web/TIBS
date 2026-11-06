@@ -39,7 +39,7 @@ async function controler(request: Request) {
   const seul = q.get("r");
   const debut = decale(`${mois[0]}-01`, -7);
   const fin = decale(`${mois[mois.length - 1]}-28`, 20);
-  const out: Record<string, Record<string, BilanMoisCB>> = {};
+  const out: Record<string, Record<string, BilanMoisCB & { modesCaisse: { joursTR: number; joursAutres: number } }>> = {};
   const releve: Record<string, unknown> = {};
   for (const r of RESTAURANTS) {
     if (seul && r.id !== seul) continue;
@@ -57,7 +57,12 @@ async function controler(request: Request) {
       const valeur = d.get("valeur") as string | undefined;
       return { id: d.id, date: d.get("date") as string, amount: d.get("montant") as number, libelle: (d.get("libelle") as string) ?? "", ...(valeur ? { valeur } : {}) };
     });
-    out[r.id] = Object.fromEntries(mois.map((m) => [m, bilanCB(m, caisse, lignes)]));
+    // Journées où la caisse a des titres-restaurant ou « autres » à part de la CB (compteurs) : dit si la CB les inclut.
+    const modes = (m: string) => {
+      const docs = cash.docs.filter((d) => String(d.get("date")).startsWith(m));
+      return { joursTR: docs.filter((d) => Number(d.get("ticketsResto") ?? 0) > 0).length, joursAutres: docs.filter((d) => Number(d.get("autres") ?? 0) > 0).length };
+    };
+    out[r.id] = Object.fromEntries(mois.map((m) => [m, { ...bilanCB(m, caisse, lignes), modesCaisse: modes(m) }]));
     // &detail=1 : chaque crédit du mois (règle déduite) dans le journal Vercel, privé ; la réponse, publique, reste en compteurs.
     if (q.get("detail") === "1") {
       const sans = lignes.map((b) => ({ id: b.id, date: b.date, amount: b.amount, libelle: b.libelle }));
