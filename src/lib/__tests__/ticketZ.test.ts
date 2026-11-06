@@ -375,6 +375,8 @@ describe("contrôle d'un mois en compteurs", () => {
     expect(b.diagnostic.familles).toEqual({ cb: 3, uber: 1, especes: 0, tr: 1, amex: 0, stripe: 0, autre: 1 });
     expect(b.diagnostic.manque).toEqual({ tr: 1, trDecale: 1, amex: 0, amexDecale: 0 });
     expect(b.diagnostic.creditsSansCaisse).toEqual([]);
+    // 05/10/2026 = lundi : -2 % ; 06 = mardi : -2 % ; 07 = mercredi : -2 %.
+    expect(b.diagnostic.parJour).toEqual({ lun: { credits: 1, pourcent: -2 }, mar: { credits: 1, pourcent: -2 }, mer: { credits: 1, pourcent: -2 } });
   });
   it("compte les groupes exacts, en plus et en moins, avec et sans date de valeur", () => {
     const lignes = [
