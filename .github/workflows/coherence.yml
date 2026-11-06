@@ -12,12 +12,13 @@ on:
         required: true
         default: ""
       action:
-        description: "rattrapage (L'Addition) ou controle (CB caisse ↔ banque)"
+        description: "controle (CB caisse ↔ banque), releve-controle (relevé bancaire d'abord) ou rattrapage (L'Addition)"
         required: true
         default: controle
         type: choice
         options:
           - controle
+          - releve-controle
           - rattrapage
 
 jobs:
@@ -39,7 +40,7 @@ jobs:
           done
 
   controle:
-    if: inputs.action == 'controle'
+    if: inputs.action == 'controle' || inputs.action == 'releve-controle'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -47,8 +48,9 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           MOIS: ${{ inputs.mois }}
+          RELEVE: ${{ inputs.action == 'releve-controle' && '1' || '0' }}
         run: |
           if ! [[ "$MOIS" =~ ^[0-9]{4}-[0-9]{2}(,[0-9]{4}-[0-9]{2})*$ ]]; then echo "mois attendus : AAAA-MM[,AAAA-MM]"; exit 1; fi
-          code=$(curl -sS -o out.json -w "%{http_code}" --max-time 120 -H "Authorization: Bearer $CRON_SECRET" "https://tibs.vercel.app/api/cron/controle-cb?mois=$MOIS")
+          code=$(curl -sS -o out.json -w "%{http_code}" --max-time 320 -H "Authorization: Bearer $CRON_SECRET" "https://tibs.vercel.app/api/cron/controle-cb?mois=$MOIS&releve=$RELEVE")
           cat out.json; echo
           test "$code" = "200"
