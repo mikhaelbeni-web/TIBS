@@ -161,7 +161,11 @@ export function moisARelever(now = new Date()): string[] {
  * « Détails par service » du mois, enregistre chaque journée (CB, espèces, Uber, TTC) puis lit
  * les tickets Z qui ne l'ont pas encore été (nombre de commandes Uber, détail des paiements).
  */
-export async function synchroniserLAddition(rid: RestaurantId, opts: { mois?: string[]; maxZ?: number; budgetMs?: number } = {}): Promise<BilanServices> {
+export async function synchroniserLAddition(
+  rid: RestaurantId,
+  /** noter: false = rattrapage de mois passés, sans toucher à l'état du relevé quotidien. */
+  opts: { mois?: string[]; maxZ?: number; budgetMs?: number; noter?: boolean } = {},
+): Promise<BilanServices> {
   const debut = Date.now();
   const db = adminDb();
   const privRef = db.doc(`restaurants/${rid}/private/laddition`);
@@ -169,7 +173,7 @@ export async function synchroniserLAddition(rid: RestaurantId, opts: { mois?: st
   const bilan: BilanServices = { le: Date.now(), mois: opts.mois ?? moisARelever(), jours: 0, zLus: 0, echecs: [] };
   // État affiché dans Pointage (settings est lisible par le gérant ; private ne l'est pas).
   const fin = async () => {
-    await db.doc(`restaurants/${rid}/settings/ticketsZ`).set(bilan);
+    if (opts.noter !== false) await db.doc(`restaurants/${rid}/settings/ticketsZ`).set(bilan);
     return bilan;
   };
   if (!priv?.identifiant || !priv?.motDePasse) {
