@@ -252,7 +252,21 @@ export function listerIncoherences(d: DonneesIncoherences): BilanIncoherences {
     // Semaine pas finie : rien à comparer encore.
     if (r.semaine.fin >= today) continue;
     const periode = `semaine du ${fr(r.semaine.debut)} au ${fr(r.semaine.fin)}`;
-    if (r.statut === "ecart") {
+    if (r.statut === "ecart" && !r.versement) {
+      // Pas de récap Uber enregistré pour la semaine (mail non reçu, historique d'avant l'app) : on regarde l'argent.
+      // Un virement Uber dans les 10 jours qui suivent = semaine payée, rien à signaler ; sans relevé, on ne sait pas.
+      const paye = virementsUber.some((b) => b.date > r.semaine.fin && daysBetween(r.semaine.fin, b.date) <= 10);
+      if (paye || !d.bank.length || r.semaine.fin < debutBanque) continue;
+      liste.push({
+        cle: `uber-semaine:${cle}`,
+        type: "uber_semaine",
+        date: r.semaine.debut,
+        jour: r.semaine.debut,
+        titre: "Aucun virement Uber Eats reçu",
+        detail: `Uber, ${periode} : ${formatEuros(r.caisseSemaine)} dans les Z, ni récap Uber ni virement Uber sur le compte dans les 10 jours.`,
+        raison: "sans_versement",
+      });
+    } else if (r.statut === "ecart") {
       liste.push({
         cle: `uber-semaine:${cle}`,
         type: "uber_semaine",

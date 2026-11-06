@@ -137,6 +137,24 @@ describe("incohérences de l'accueil", () => {
     expect(avec.liste.filter((x) => x.type.startsWith("uber"))).toEqual([]);
   });
 
+  it("semaine sans récap Uber : rien si le virement Uber est arrivé, alerte sinon", () => {
+    const jours = ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08"];
+    const cash = jours.map((d) => jour(d, 0, { uber: 10000 }));
+    const sans = listerIncoherences({ cash, bank: [debut], versementsUber: [], uberJours: [], today: "2026-11-25", depuis: "2026-11-01" });
+    expect(sans.liste.map((x) => [x.type, x.raison])).toEqual([["uber_semaine", "sans_versement"]]);
+    const paye = listerIncoherences({
+      cash,
+      bank: [debut, { id: "u", date: "2026-11-11", amount: 52500, libelle: "VIR UBER EATS" }],
+      versementsUber: [],
+      uberJours: [],
+      today: "2026-11-25",
+      depuis: "2026-11-01",
+    });
+    expect(paye.liste).toEqual([]);
+    // Sans relevé bancaire (17e) : on ne peut pas savoir, pas d'alerte.
+    expect(listerIncoherences({ cash, bank: [], versementsUber: [], uberJours: [], today: "2026-11-25", depuis: "2026-11-01" }).liste).toEqual([]);
+  });
+
   it("liste triée de la plus récente à la plus ancienne", () => {
     const paiements = [{ libelle: "CB", montant: 50000, categorie: "cb" }];
     const cash = ["2026-11-03", "2026-11-09", "2026-11-05"].map((d) => jour(d, 0, { paiements, total: 1 }));
