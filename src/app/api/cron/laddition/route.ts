@@ -3,6 +3,7 @@ import { estMois } from "@/lib/laddition";
 import { moisCle } from "@/lib/reglages";
 import { RESTAURANTS, type RestaurantId } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
+import { majIncoherencesSiBesoin } from "@/lib/server/incoherences";
 import { synchroniserLAddition } from "@/lib/server/ticketZServeur";
 
 export const maxDuration = 300;
@@ -47,7 +48,9 @@ export async function GET(request: Request) {
       ...(force ? { mois, noter: false } : {}),
       ...(sansZ ? { maxZ: 0 } : {}),
     });
-    out[id] = { jours: b.jours, zLus: b.zLus, echecs: b.echecs.length, ...(b.erreur ? { erreur: b.erreur } : {}) };
+    // Nouvelles journées de caisse : les incohérences de l'accueil sont recalculées (relevé quotidien seulement).
+    const inc = !force && b.jours > 0 ? await majIncoherencesSiBesoin(id, true) : null;
+    out[id] = { jours: b.jours, zLus: b.zLus, echecs: b.echecs.length, ...(b.erreur ? { erreur: b.erreur } : {}), ...(inc ? { incoherences: inc } : {}) };
   }
   return Response.json({ dus, ...out });
 }

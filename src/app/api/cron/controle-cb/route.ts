@@ -6,6 +6,7 @@ import { moisCle } from "@/lib/reglages";
 import { RESTAURANTS } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
 import { syncBanque } from "@/lib/server/banqueSync";
+import { majIncoherences } from "@/lib/server/incoherences";
 
 export const maxDuration = 300;
 
@@ -96,6 +97,22 @@ async function controler(request: Request) {
       }
     }
   }
+  // &incoherences=1 : recalcule la liste de l'accueil ; seulement des compteurs par type dans la réponse publique.
+  const incoherences: Record<string, unknown> = {};
+  if (q.get("incoherences") === "1") {
+    for (const r of RESTAURANTS) {
+      if (seul && r.id !== seul) continue;
+      const b = await majIncoherences(r.id);
+      const parType: Record<string, number> = {};
+      for (const x of b.liste) parType[x.type] = (parType[x.type] ?? 0) + 1;
+      const parMois: Record<string, number> = {};
+      for (const x of b.liste) parMois[x.date.slice(0, 7)] = (parMois[x.date.slice(0, 7)] ?? 0) + 1;
+      incoherences[r.id] = { depuis: b.depuis, total: b.liste.length, parType, parMois, attente: b.attente.length };
+    }
+  }
   // Sérialisé ici pour que toute erreur passe par le message ci-dessus.
-  return new Response(JSON.stringify({ ...(Object.keys(releve).length ? { releve } : {}), ...out }), { headers: { "content-type": "application/json" } });
+  return new Response(
+    JSON.stringify({ ...(Object.keys(releve).length ? { releve } : {}), ...(Object.keys(incoherences).length ? { incoherences } : {}), ...out }),
+    { headers: { "content-type": "application/json" } },
+  );
 }

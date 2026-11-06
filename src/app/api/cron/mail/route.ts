@@ -6,6 +6,7 @@ import { relireIncomplets, syncMail, type SyncResult } from "@/lib/server/mailSy
 import { validerAutomatiquement, type AutoResult } from "@/lib/server/autoValider";
 import { releveBanqueDu } from "@/lib/banque";
 import { syncBanque, type BanqueSyncResult } from "@/lib/server/banqueSync";
+import { majIncoherencesSiBesoin } from "@/lib/server/incoherences";
 
 export const maxDuration = 300;
 
@@ -51,6 +52,13 @@ export async function GET(request: Request) {
   for (const r of RESTAURANTS) {
     auto[r.id] = await validerAutomatiquement(r.id).catch((e) => ({ erreur: (e as Error).message }));
   }
+  // Incohérences de l'accueil : recalculées après un relevé bancaire qui a apporté des opérations, sinon toutes les 12 h.
+  const incoherences: Record<string, unknown> = {};
+  for (const r of RESTAURANTS) {
+    const b = banque[r.id];
+    const n = await majIncoherencesSiBesoin(r.id, b?.status === "ok" && b.nouvelles > 0);
+    if (n) incoherences[r.id] = n;
+  }
   const erreur = Object.values(out).some((x) => x.status === "erreur");
-  return Response.json({ ...out, relu, banque, auto }, { status: erreur ? 502 : 200 });
+  return Response.json({ ...out, relu, banque, auto, incoherences }, { status: erreur ? 502 : 200 });
 }
