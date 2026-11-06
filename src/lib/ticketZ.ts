@@ -84,35 +84,98 @@ export type Statut = "ok" | "proche" | "ecart" | "attente" | "absent";
 
 export interface ComparaisonCB {
   statut: Statut;
+  /** CB en caisse comparée : la journée choisie, plus les autres journées créditées le même jour (week-end). */
   caisse: number;
   banque?: { date: string; montant: number; libelle: string; jours: number };
   ecart?: number; // banque - caisse (négatif = commission)
-  /** Remises lues par la date du libellé (« CB TIB S 301026 »), une par contrat TPE. */
+  /** Remises CB créditées le premier jour bancaire après la journée de service. */
   remises?: BankLine[];
-  /** Frais « CB COM … » de ces remises (centimes, positifs). */
-  frais?: number;
+  /** Journées de caisse couvertes par ces remises (samedi soir + dimanche → lundi). */
+  joursCouverts?: CashLine[];
+  /** Un paiement est passé sur le jour voisin : les deux écarts se compensent. */
+  voisin?: { credit: string; ecart: number };
+  /** Écart cumulé du mois, remises par jour de crédit contre CB des journées couvertes. */
+  cumul?: { depuis: string; caisse: number; banque: number; ecart: number };
   /** Crédits bancaires des jours suivants, pour vérifier à l'œil quand rien n'est rapproché. */
   candidats: BankLine[];
 }
 
+const REMISE = /\bCB\b(?!\s*COM)\D*?\d{6}\b/i;
+
+/** Remise CB d'un TPE (« CB TIB S 021126 CONTRAT 806056 »), hors frais « CB COM ». */
+export const estRemiseCB = (b: BankLine) => b.amount > 0 && REMISE.test(b.libelle);
+
+interface GroupeCB {
+  /** Jour où la banque crédite les remises. */
+  credit: string;
+  remises: BankLine[];
+  banque: number;
+  jours: CashLine[];
+  caisse: number;
+}
+
 /**
- * CB du jour contre remise en banque. On rapproche sur une fenêtre autour du jour pour qu'une
- * remise ne soit pas attribuée à deux jours (même algorithme que le pointage du mois).
+ * Les paiements CB d'une journée de service sont crédités le premier jour bancaire qui suit
+ * (le TPE les envoie la nuit ; samedi soir et dimanche arrivent le lundi). La date écrite dans le
+ * libellé (« 021126 ») est celle de l'envoi : une remise « 021126 » peut contenir le dimanche 01/11.
+ * Vérifié sur octobre 2026 : par jour de crédit, écart de 0 à 270 € ; par date de libellé, jusqu'à 4 000 €.
  */
-/** « 2026-10-30 » → « 301026 », la date des libellés de remise CB (Caisse d'Épargne). */
-export const codeLibelle = (iso: string) => `${iso.slice(8, 10)}${iso.slice(5, 7)}${iso.slice(2, 4)}`;
+function groupesCB(joursCaisse: CashLine[], remises: BankLine[], maxDays: number): GroupeCB[] {
+  const credits = [...new Set(remises.map((b) => b.date))].sort();
+  return credits.map((credit, i) => {
+    const plancher = addDays(credit, -maxDays);
+    const debut = i > 0 && credits[i - 1] > plancher ? credits[i - 1] : plancher;
+    const rs = remises.filter((b) => b.date === credit);
+    const jours = joursCaisse.filter((c) => c.amount > 0 && c.date >= debut && c.date < credit).sort((a, b) => a.date.localeCompare(b.date));
+    return { credit, remises: rs, banque: rs.reduce((t, b) => t + b.amount, 0), jours, caisse: jours.reduce((t, c) => t + c.amount, 0) };
+  });
+}
 
-const REMISE = /\bCB\b(?!\s*COM)\D*?(\d{6})\b/i;
-const FRAIS = /\bCB\s*COM\D*?(\d{6})\b/i;
+const TOLERANCE_CB = 100; // centimes
 
-/** Remises CB et frais dont le libellé porte la date donnée. */
-export function remisesDuJour(jour: string, lignes: BankLine[]): { remises: BankLine[]; frais: number } {
-  const code = codeLibelle(jour);
-  const remises = lignes.filter((b) => b.amount > 0 && REMISE.exec(b.libelle)?.[1] === code);
-  const frais = lignes
-    .filter((b) => b.amount < 0 && FRAIS.exec(b.libelle)?.[1] === code)
-    .reduce((s, b) => s - b.amount, 0);
-  return { remises, frais };
+function parCredit(
+  jour: string,
+  joursCaisse: CashLine[],
+  remises: BankLine[],
+  maxDays: number,
+): Omit<ComparaisonCB, "candidats"> | null {
+  const groupes = groupesCB(joursCaisse, remises, maxDays);
+  const i = groupes.findIndex((g) => g.jours.some((c) => c.date === jour));
+  if (i < 0) return null;
+  const g = groupes[i];
+  const ecart = g.banque - g.caisse;
+  let statut: Statut = Math.abs(ecart) <= TOLERANCE_CB ? "ok" : "ecart";
+  let voisin: ComparaisonCB["voisin"];
+  if (statut === "ecart") {
+    for (const v of [groupes[i - 1], groupes[i + 1]]) {
+      if (!v || !v.caisse) continue;
+      const ev = v.banque - v.caisse;
+      if (Math.abs(ecart + ev) <= TOLERANCE_CB) {
+        statut = "proche";
+        voisin = { credit: v.credit, ecart: ev };
+        break;
+      }
+    }
+  }
+  const mois = jour.slice(0, 7);
+  const duMois = groupes.slice(0, i + 1).filter((x) => x.caisse > 0 && x.jours.every((c) => c.date.startsWith(mois)));
+  const cumul = duMois.length
+    ? (() => {
+        const caisse = duMois.reduce((t, x) => t + x.caisse, 0);
+        const banque = duMois.reduce((t, x) => t + x.banque, 0);
+        return { depuis: duMois[0].jours[0].date, caisse, banque, ecart: banque - caisse };
+      })()
+    : undefined;
+  return {
+    statut,
+    caisse: g.caisse,
+    banque: { date: g.credit, montant: g.banque, libelle: g.remises.map((b) => b.libelle).join(" + "), jours: daysBetween(jour, g.credit) },
+    ecart,
+    remises: g.remises,
+    joursCouverts: g.jours,
+    ...(voisin ? { voisin } : {}),
+    ...(cumul ? { cumul } : {}),
+  };
 }
 
 export function comparerCB(
@@ -123,29 +186,16 @@ export function comparerCB(
     maxDays = 5,
     maxFeeRate = 0.03,
     today = new Date().toISOString().slice(0, 10),
-    /** Toutes les lignes (débits compris) pour lire les remises et frais par leur libellé. */
+    /** Toutes les lignes (débits compris) pour reconnaître les remises par leur libellé. */
     lignes = credits,
   }: { maxDays?: number; maxFeeRate?: number; today?: string; lignes?: BankLine[] } = {},
 ): ComparaisonCB {
   const caisse = joursCaisse.find((c) => c.date === jour)?.amount ?? 0;
-  // 1) Libellé daté : toutes les remises du jour (une par contrat TPE) additionnées, montant brut.
-  if (caisse > 0) {
-    for (const d of [jour, addDays(jour, 1)]) {
-      const { remises, frais } = remisesDuJour(d, lignes);
-      if (!remises.length) continue;
-      const montant = remises.reduce((s, b) => s + b.amount, 0);
-      const ecart = montant - caisse;
-      const date = remises.map((b) => b.date).sort()[0];
-      return {
-        statut: Math.abs(ecart) <= 1 ? "ok" : "ecart",
-        caisse,
-        banque: { date, montant, libelle: remises.map((b) => b.libelle).join(" + "), jours: daysBetween(jour, date) },
-        ecart,
-        remises,
-        frais,
-        candidats: [],
-      };
-    }
+  // 1) Remises CB reconnues au libellé : regroupées par jour de crédit, montant brut.
+  const remises = lignes.filter(estRemiseCB);
+  if (caisse > 0 && remises.length) {
+    const r = parCredit(jour, joursCaisse, remises, maxDays);
+    if (r) return { ...r, candidats: [] };
   }
   const candidats = credits
     .filter((b) => {
@@ -154,6 +204,11 @@ export function comparerCB(
     })
     .sort((a, b) => a.date.localeCompare(b.date));
   if (caisse <= 0) return { statut: "absent", caisse, candidats };
+  if (remises.length) {
+    // Format Caisse d'Épargne reconnu mais aucune remise créditée après ce jour : relevé pas encore à jour, ou remise manquante.
+    const derniere = lignes.reduce((m, b) => (b.date > m ? b.date : m), "");
+    return { statut: derniere <= jour || daysBetween(jour, today) <= 3 ? "attente" : "ecart", caisse, candidats };
+  }
   const fenetre = joursCaisse.filter((c) => Math.abs(daysBetween(jour, c.date)) <= 10);
   const banque = credits.filter((b) => {
     const d = daysBetween(jour, b.date);

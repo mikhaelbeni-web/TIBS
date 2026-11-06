@@ -288,17 +288,40 @@ export function JourAJour({
           </Bloc>
 
           <Bloc titre="CB caisse ↔ banque" statut={cb.statut}>
-            <Ligne label="CB du ticket Z">{formatEuros(cb.caisse)}</Ligne>
+            {cb.joursCouverts && cb.joursCouverts.length > 1 ? (
+              <>
+                {cb.joursCouverts.map((c) => (
+                  <Ligne key={c.id} label={`CB caisse du ${fr(c.date)}`}>
+                    {formatEuros(c.amount)}
+                  </Ligne>
+                ))}
+                <Ligne label={`CB caisse (${cb.joursCouverts.length} journées)`}>{formatEuros(cb.caisse)}</Ligne>
+              </>
+            ) : (
+              <Ligne label="CB du ticket Z">{formatEuros(cb.caisse)}</Ligne>
+            )}
             {cb.banque ? (
               <>
                 {cb.remises ? (
                   <>
+                    <p className="pt-1 text-xs font-medium text-muted">Remises CB créditées le {fr(cb.banque.date)}</p>
                     {cb.remises.map((b) => (
-                      <Ligne key={b.id} label={`${fr(b.date)} · ${b.libelle.slice(0, 30)}`}>{formatEuros(b.amount)}</Ligne>
+                      <Ligne key={b.id} label={b.libelle.slice(0, 34)}>
+                        {formatEuros(b.amount)}
+                      </Ligne>
                     ))}
                     {cb.remises.length > 1 && <Ligne label="Total des remises">{formatEuros(cb.banque.montant)}</Ligne>}
                     <Ligne label="Écart">{formatEuros(cb.ecart ?? 0)}</Ligne>
-                    {cb.frais ? <Ligne label="Frais CB prélevés à part">{formatEuros(-cb.frais)}</Ligne> : null}
+                    {cb.voisin && (
+                      <p className="text-xs text-muted">
+                        Compensé par le crédit du {fr(cb.voisin.credit)} ({formatEuros(cb.voisin.ecart)}) : un paiement est passé sur le jour voisin.
+                      </p>
+                    )}
+                    {cb.cumul && <Ligne label={`Écart cumulé depuis le ${fr(cb.cumul.depuis)}`}>{formatEuros(cb.cumul.ecart)}</Ligne>}
+                    <p className="text-xs text-muted">
+                      Les CB d&apos;une journée sont créditées le jour bancaire suivant (samedi soir et dimanche : le lundi). La date dans le libellé est celle de
+                      l&apos;envoi par le TPE, pas celle du paiement.
+                    </p>
                   </>
                 ) : (
                   <>
