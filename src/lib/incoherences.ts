@@ -33,6 +33,10 @@ export interface Incoherence {
   detail: string;
   /** Écart en centimes (signe : + = plus en banque / chez Uber que dans la caisse). */
   ecart?: number;
+  /** Écart rapporté au montant de la caisse (0,05 = 5 %), pour le diagnostic sans montant. */
+  part?: number;
+  /** Cause précise (Uber de la semaine) : sans_versement, semaine_incomplete, ecart_ventes. */
+  raison?: string;
 }
 
 export interface BilanIncoherences {
@@ -261,6 +265,8 @@ export function listerIncoherences(d: DonneesIncoherences): BilanIncoherences {
             : `Uber, ${periode} : ${formatEuros(r.versement.brut ?? 0)} de ventes chez Uber, ${formatEuros(r.caisseSemaine)} dans les Z (${signe(r.ecart ?? 0)}).`
           : `Uber, ${periode} : ${formatEuros(r.caisseSemaine)} dans les Z, aucun récap ni versement Uber Eats trouvé.`,
         ...(r.ecart !== undefined ? { ecart: r.ecart } : {}),
+        ...(r.ecart !== undefined && r.caisseSemaine ? { part: Math.round((r.ecart / r.caisseSemaine) * 1000) / 1000 } : {}),
+        raison: !r.versement ? "sans_versement" : r.joursSaisis < 7 ? `semaine_incomplete_${r.joursSaisis}` : "ecart_ventes",
       });
     } else if (r.statut === "attente" && !r.versement) {
       attente.push({ cle: `uber-semaine:${cle}`, titre: `Uber, ${periode} : versement pas encore reçu` });
