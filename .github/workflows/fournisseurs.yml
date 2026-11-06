@@ -1,0 +1,36 @@
+# Lancé à la main. Factures fournisseurs depuis janvier :
+# - mesure : compteurs (mails, factures, banque par mois). Avec « cle », le détail est renvoyé chiffré
+#   (illisible dans ce journal public sans la clé privée correspondante).
+name: Factures fournisseurs depuis janvier (manuel)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "mesure"
+        required: true
+        default: mesure
+        type: choice
+        options:
+          - mesure
+      cle:
+        description: "Clé publique RSA (SPKI DER, base64) pour chiffrer le détail. Vide = compteurs seulement."
+        required: false
+        default: ""
+
+jobs:
+  fournisseurs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Appeler /api/cron/fournisseurs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          ACTION: ${{ inputs.action }}
+          CLE: ${{ inputs.cle }}
+        run: |
+          if [ -n "$CLE" ] && ! [[ "$CLE" =~ ^[A-Za-z0-9+/=]+$ ]]; then echo "clé invalide"; exit 1; fi
+          code=$(curl -sS -o out.json -w "%{http_code}" --max-time 320 -G -H "Authorization: Bearer $CRON_SECRET" \
+            --data-urlencode "action=$ACTION" --data-urlencode "cle=$CLE" https://tibs.vercel.app/api/cron/fournisseurs)
+          echo "HTTP $code"; cat out.json; echo
+          test "$code" = "200"
