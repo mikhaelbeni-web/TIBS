@@ -2,7 +2,14 @@
 
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import { connectAuthEmulator, getAuth, type Auth } from "firebase/auth";
-import { connectFirestoreEmulator, getFirestore, type Firestore } from "firebase/firestore";
+import {
+  connectFirestoreEmulator,
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  type Firestore,
+} from "firebase/firestore";
 
 // Les variables NEXT_PUBLIC_* sont injectées au build (voir .env.example).
 const firebaseConfig = {
@@ -24,7 +31,14 @@ export function firebaseApp(): FirebaseApp {
     );
   }
   if (!app) {
-    app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+    const neuve = !getApps().length;
+    app = neuve ? initializeApp(firebaseConfig) : getApp();
+    // Cache local (IndexedDB) : en revenant sur une page, seuls les documents changés sont relus et facturés, au lieu de
+    // toute la collection à chaque ouverture (quota gratuit : 50 000 lectures par jour). Sans IndexedDB (navigation
+    // privée), le SDK repasse tout seul en cache mémoire.
+    if (neuve && typeof window !== "undefined") {
+      initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
+    }
     // Développement local : `npm run emulators` puis NEXT_PUBLIC_USE_EMULATORS=1 dans .env.local
     if (process.env.NEXT_PUBLIC_USE_EMULATORS === "1" && typeof window !== "undefined") {
       connectAuthEmulator(getAuth(app), "http://127.0.0.1:9099", { disableWarnings: true });

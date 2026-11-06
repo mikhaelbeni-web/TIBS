@@ -55,15 +55,17 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
   const home = db.doc(`restaurants/${rid}`);
   const out: AutoResult = { valides: 0, enDoute: 0 };
 
-  const [pending, suppliersSnap, invoicesSnap, traites, ...statuts] = await Promise.all([
-    home.collection("inbox").where("statut", "==", "a_verifier").get(),
+  // Rien à valider (cas de la plupart des réveils) : on s'arrête avant de relire fournisseurs, factures et mails traités,
+  // qui coûtent des milliers de lectures Firestore à chaque passage (quota gratuit : 50 000 par jour).
+  const pending = await home.collection("inbox").where("statut", "==", "a_verifier").get();
+  const factures = pending.docs.filter((d) => d.get("item.kind") === "facture" && !sauf.includes(d.id));
+  if (!factures.length) return out;
+  const [suppliersSnap, invoicesSnap, traites, ...statuts] = await Promise.all([
     home.collection("suppliers").get(),
     home.collection("invoices").get(),
     home.collection("inbox").where("statut", "in", ["valide", "releve"]).get(),
     ...RESTAURANT_IDS.map((r) => db.doc(`restaurants/${r}/settings/mail`).get()),
   ]);
-  const factures = pending.docs.filter((d) => d.get("item.kind") === "facture" && !sauf.includes(d.id));
-  if (!factures.length) return out;
 
   // Règles de tri de la boîte d'où vient le mail (une facture peut avoir été routée depuis l'autre restaurant).
   const rulesDe = new Map(RESTAURANT_IDS.map((r, i) => [r, mergeRules(statuts[i].get("regles"))]));
