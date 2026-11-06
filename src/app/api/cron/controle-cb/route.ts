@@ -107,7 +107,9 @@ async function controler(request: Request) {
       for (const x of b.liste) parType[x.type] = (parType[x.type] ?? 0) + 1;
       const parMois: Record<string, number> = {};
       for (const x of b.liste) parMois[x.date.slice(0, 7)] = (parMois[x.date.slice(0, 7)] ?? 0) + 1;
-      incoherences[r.id] = { depuis: b.depuis, total: b.liste.length, parType, parMois, attente: b.attente.length };
+      // Causes et écarts relatifs (ratios, jamais de montant) pour régler les seuils.
+      const causes = b.liste.filter((x) => x.raison || x.part !== undefined).map((x) => [x.type, x.raison ?? "", x.part ?? null]);
+      incoherences[r.id] = { depuis: b.depuis, total: b.liste.length, parType, parMois, attente: b.attente.length, causes };
     }
   }
   // Sérialisé ici pour que toute erreur passe par le message ci-dessus.
