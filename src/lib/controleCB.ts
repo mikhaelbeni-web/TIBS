@@ -47,6 +47,12 @@ export interface BilanMoisCB {
      * « decale » : virements reçus 7 jours plus tard que les crédits CB comparés (paiement à la semaine).
      */
     manque: { tr: number | null; trDecale: number | null; amex: number | null; amexDecale: number | null };
+    /**
+     * Manque CB en % de la CB de caisse (arrondi à 0,1), par jour de service, sur les crédits à moins de 200 € d'écart.
+     * Les cartes titre-restaurant ne passent pas le dimanche et peu le samedi : un manque bien plus faible le week-end
+     * désigne les titres-restaurant ; un manque égal tous les jours, une autre cause (paiements refusés, frais…).
+     */
+    parJour: Record<string, { credits: number; pourcent: number }>;
   };
   remises: ReturnType<typeof compterValeurs>;
 }
@@ -192,6 +198,21 @@ export function bilanCB(mois: string, cash: CashLine[], lignes: BankLine[], toda
         (o, b) => ((o[famille(b)] += 1), o),
         { cb: 0, uber: 0, especes: 0, tr: 0, amex: 0, stripe: 0, autre: 0 } as Record<Famille, number>,
       ),
+      parJour: (() => {
+        const noms = ["dim", "lun", "mar", "mer", "jeu", "ven", "sam"];
+        const t: Record<string, { credits: number; caisse: number; ecart: number }> = {};
+        for (const g of ecarts) {
+          const e = g.ecart ?? 0;
+          if (!g.joursCouverts?.length || Math.abs(e) > 20000 || g.caisse <= 0) continue;
+          const j = g.joursCouverts.map((c) => new Date(`${c.date}T00:00:00Z`).getUTCDay());
+          const cle = j.every((x) => x === 0 || x === 6) ? "we" : j.length === 1 ? noms[j[0]] : "melange";
+          const v = (t[cle] ??= { credits: 0, caisse: 0, ecart: 0 });
+          v.credits++;
+          v.caisse += g.caisse;
+          v.ecart += e;
+        }
+        return Object.fromEntries(Object.entries(t).map(([k, v]) => [k, { credits: v.credits, pourcent: Math.round((1000 * v.ecart) / v.caisse) / 10 }]));
+      })(),
       manque: (() => {
         const petit = -ecarts.reduce((t, g) => t + ((g.ecart ?? 0) < -100 && (g.ecart ?? 0) >= -20000 ? (g.ecart ?? 0) : 0), 0);
         const somme = (f: Famille, de: string, a: string) => credits.filter((b) => b.date >= de && b.date <= a && famille(b) === f).reduce((t, b) => t + b.amount, 0);
