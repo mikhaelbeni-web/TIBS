@@ -1,6 +1,6 @@
 import { compterValeurs } from "./banque";
 import type { BankLine, CashLine } from "./reconcile";
-import { comparerCB, deduireValeurs, estRemiseCB, lotDuMatinPossible } from "./ticketZ";
+import { comparerCB, deduireValeurs, estRemiseCB, lotDuMatinPossible, type ComparaisonCB } from "./ticketZ";
 
 export interface BilanRegle {
   /** Groupes de crédit (une journée, ou samedi + dimanche) rapprochés. */
@@ -29,8 +29,74 @@ export interface BilanMoisCB {
    * Pour chercher un écart qui revient chaque jour, sans montant : nombre de lignes de frais « CB COM » du mois, et
    * répartition des écarts de la règle déduite par tranche d'euros et par tranche de pourcentage de la CB en caisse.
    */
-  diagnostic: { fraisCB: number; euros: Record<string, number>; pourcents: Record<string, number> };
+  diagnostic: {
+    fraisCB: number;
+    euros: Record<string, number>;
+    pourcents: Record<string, number>;
+    anomalies: Anomalie[];
+    /** Jours du mois sans journée de caisse (fermeture, ou journée pas relevée dans L'Addition). */
+    joursSansCaisse: string[];
+    /** Jours de crédit du mois dont les remises ne couvrent aucune journée de caisse : elles ne sont comparées à rien. */
+    creditsSansCaisse: string[];
+  };
   remises: ReturnType<typeof compterValeurs>;
+}
+
+/** Un crédit avec plus de 200 € d'écart, décrit sans montant : ce qui permet d'en deviner la cause. */
+export interface Anomalie {
+  credit: string;
+  sens: "+" | "-";
+  taille: "200-500" | "500+";
+  /** Journées de caisse couvertes, et jours du calendrier sans journée de caisse dans la même période. */
+  jours: number;
+  joursSansCaisse: number;
+  remises: number;
+  lotsZero: number;
+  lotsDeduits: number;
+  /** Le crédit voisin a un écart de sens contraire qui l'annule à 10 % près : lot rattaché au mauvais crédit. */
+  voisinOppose?: "avant" | "apres";
+  /** L'écart vaut, à 1 % près, la CB d'une des journées couvertes (journée sans remise, ou en trop). */
+  egalJournee?: boolean;
+  /** L'écart vaut, à 1 € près, une remise de ce crédit ou du suivant. */
+  egalRemise?: boolean;
+  /** Premier crédit du relevé : les remises d'avant manquent peut-être. */
+  premierCredit?: boolean;
+}
+
+function joursDuMois(mois: string): string[] {
+  const out: string[] = [];
+  for (let d = new Date(`${mois}-01T00:00:00Z`); d.toISOString().startsWith(mois); d = new Date(d.getTime() + 86400000)) out.push(d.toISOString().slice(0, 10));
+  return out;
+}
+
+function anomalies(groupes: ComparaisonCB[], lignes: BankLine[]): Anomalie[] {
+  const tries = [...groupes].sort((a, b) => (a.banque?.date ?? "").localeCompare(b.banque?.date ?? ""));
+  const premier = lignes.filter(estRemiseCB).reduce((m, b) => (b.date < m ? b.date : m), "9999");
+  const out: Anomalie[] = [];
+  tries.forEach((g, i) => {
+    const e = g.ecart ?? 0;
+    if (!g.banque || Math.abs(e) <= 20000) return;
+    const jours = g.joursCouverts ?? [];
+    const debut = jours[0]?.date ?? g.banque.date;
+    const calendrier = Math.round((Date.parse(g.banque.date) - Date.parse(debut)) / 86400000);
+    const oppose = (v?: ComparaisonCB) => !!v && Math.sign(v.ecart ?? 0) === -Math.sign(e) && Math.abs(e + (v.ecart ?? 0)) <= Math.abs(e) / 10;
+    const suivant = tries[i + 1];
+    out.push({
+      credit: g.banque.date,
+      sens: e > 0 ? "+" : "-",
+      taille: Math.abs(e) > 50000 ? "500+" : "200-500",
+      jours: jours.length,
+      joursSansCaisse: Math.max(0, calendrier - jours.length),
+      remises: g.remises?.length ?? 0,
+      lotsZero: (g.remises ?? []).filter((b) => lotDuMatinPossible({ ...b, valeur: undefined })).length,
+      lotsDeduits: (g.remises ?? []).filter((b) => b.valeurDeduite).length,
+      ...(oppose(tries[i - 1]) ? { voisinOppose: "avant" as const } : oppose(suivant) ? { voisinOppose: "apres" as const } : {}),
+      ...(jours.some((j) => Math.abs(j.amount - Math.abs(e)) <= j.amount / 100) ? { egalJournee: true } : {}),
+      ...([...(g.remises ?? []), ...(suivant?.remises ?? [])].some((b) => Math.abs(b.amount - Math.abs(e)) <= 100) ? { egalRemise: true } : {}),
+      ...(g.banque.date <= premier || (g.remises ?? []).some((b) => b.date === premier) ? { premierCredit: true } : {}),
+    });
+  });
+  return out;
 }
 
 const TRANCHES_EUROS = [1, 20, 50, 100, 200, 500];
@@ -47,7 +113,7 @@ function compter(
   lignes: BankLine[],
   today: string,
   deduire: boolean,
-  ecarts: { ecart: number; caisse: number }[] = [],
+  ecarts: ComparaisonCB[] = [],
 ): BilanRegle {
   const credits = lignes.filter((b) => b.amount > 0);
   const vus = new Set<string>();
@@ -62,7 +128,7 @@ function compter(
     if (vus.has(r.banque.date)) continue;
     vus.add(r.banque.date);
     t.groupes++;
-    ecarts.push({ ecart: r.ecart, caisse: r.caisse });
+    ecarts.push(r);
     if (Math.abs(r.ecart) <= 100) t.exacts++;
     else if (r.ecart > 0) t.positifs++;
     else t.negatifs++;
@@ -80,7 +146,7 @@ export function bilanCB(mois: string, cash: CashLine[], lignes: BankLine[], toda
   const remises = sans.filter(estRemiseCB);
   const deduites = deduireValeurs(cash, remises);
   const duMois = (b: BankLine) => b.date.startsWith(mois);
-  const ecarts: { ecart: number; caisse: number }[] = [];
+  const ecarts: ComparaisonCB[] = [];
   const compte = (cles: string[]) => cles.reduce<Record<string, number>>((o, k) => ((o[k] = (o[k] ?? 0) + 1), o), {});
   const deduite = compter(mois, cash, sans, today, true, ecarts);
   return {
@@ -91,8 +157,13 @@ export function bilanCB(mois: string, cash: CashLine[], lignes: BankLine[], toda
     lots: { possibles: remises.filter((b) => duMois(b) && lotDuMatinPossible(b)).length, deduits: remises.filter((b) => duMois(b) && deduites.has(b.id)).length },
     diagnostic: {
       fraisCB: lignes.filter((b) => duMois(b) && b.amount < 0 && /\bCB\s*COM\b/i.test(b.libelle)).length,
-      euros: compte(ecarts.map((e) => tranche(e.ecart / 100, TRANCHES_EUROS))),
-      pourcents: compte(ecarts.filter((e) => e.caisse > 0).map((e) => tranche((100 * e.ecart) / e.caisse, TRANCHES_POURCENTS))),
+      euros: compte(ecarts.map((e) => tranche((e.ecart ?? 0) / 100, TRANCHES_EUROS))),
+      pourcents: compte(ecarts.filter((e) => e.caisse > 0).map((e) => tranche((100 * (e.ecart ?? 0)) / e.caisse, TRANCHES_POURCENTS))),
+      anomalies: anomalies(ecarts, sans),
+      joursSansCaisse: joursDuMois(mois).filter((j) => j < today && !cash.some((c) => c.date === j && c.amount > 0)),
+      creditsSansCaisse: [...new Set(remises.filter(duMois).map((b) => deduites.get(b.id) ?? b.date))]
+        .filter((d) => !ecarts.some((g) => g.banque?.date === d))
+        .sort(),
     },
     remises: compterValeurs(lignes.filter(duMois).map((b) => ({ date: b.date, montant: b.amount, libelle: b.libelle, valeur: b.valeur }))),
   };
