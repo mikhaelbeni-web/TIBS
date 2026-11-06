@@ -34,7 +34,7 @@ export const DOUTE_TEXTE: Record<Doute, string> = {
   sans_numero: "Numéro de facture absent.",
   sans_date: "Date de facture absente.",
   date_future: "Date de facture dans le futur.",
-  date_ancienne: "Date de facture plus de 2 mois avant le mail (jour et mois inversés ?).",
+  date_ancienne: "Date de facture douteuse : jour et mois peut-être inversés, ou plus d'un an avant le mail.",
   montants_absents: "HT ou TVA non lus : impossible de contrôler le calcul.",
   avoir: "Avoir d'un nouveau fournisseur, ou plus gros que ses factures habituelles : à confirmer.",
   montant_nul: "Montant à zéro.",
@@ -42,7 +42,7 @@ export const DOUTE_TEXTE: Record<Doute, string> = {
   taux_tva: "Taux de TVA anormal (au-delà de 20 %).",
   doublon: "Doublon possible : même numéro, ou même montant à quelques jours près, chez ce fournisseur.",
   montant_inhabituel: "Montant très supérieur aux factures habituelles de ce fournisseur.",
-  montant_eleve: "Première facture d'un nouveau fournisseur, au-dessus de 2 000 €.",
+  montant_eleve: "Première facture d'un nouveau fournisseur, au-dessus de 5 000 €.",
   type_document: "Le mail parle de relevé, bon de livraison, devis, duplicata ou relance, ou d'avoir alors que le montant lu est positif.",
   autre_restaurant: "Le PDF semble adressé à l'autre restaurant.",
   mois_ancien: "Facture d'un mois déjà clôturé (avant le mois dernier).",
@@ -75,7 +75,7 @@ const JOURS_FUTUR = 2; // après la réception du mail
 const JOURS_PASSE = 62; // avant la réception du mail
 const FACTEUR_INHABITUEL = 3;
 const HISTORIQUE_MIN = 3;
-const PLAFOND_NOUVEAU = 200_000; // 2 000 € TTC pour la toute première facture d'un fournisseur
+const PLAFOND_NOUVEAU = 500_000; // 5 000 € TTC pour la toute première facture d'un fournisseur reconnu par son seul nom
 
 /** Pièces qui ne sont pas une facture à payer, ou qui le sont déjà. */
 const MOTS_DOUTEUX =
@@ -103,10 +103,20 @@ export function nomDansLeMail(fournisseur: string, mail: { from?: string; subjec
 /** Avoir annoncé dans l'objet, le nom du PDF ou le numéro. */
 const MOTS_AVOIR = /(?<![\p{L}\d])(avoirs?|note de cr[ée]dit|av\d+)(?![\p{L}])/iu;
 
-/** Mois précédent AAAA-MM. */
-function moisPrecedent(jour: string): string {
-  const [y, m] = jour.split("-").map(Number);
-  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+/**
+ * Date bien antérieure au mail : normal pour une facture envoyée en retard ou une reprise depuis janvier.
+ * Douteuse seulement si jour et mois inversés donnent une date proche du mail (11/04 lu pour 04/11),
+ * ou si elle a plus d'un an de plus que le mail.
+ */
+function dateDouteuse(date: string, recu: string): boolean {
+  const ecart = jours(recu, date);
+  if (ecart <= JOURS_PASSE) return false;
+  if (ecart > 400) return true;
+  const [y, m, j] = date.split("-");
+  if (Number(j) > 12 || j === m) return false;
+  const inverse = `${y}-${j}-${m}`;
+  const e = jours(recu, inverse);
+  return e >= -JOURS_FUTUR && e <= JOURS_PASSE;
 }
 
 const jours = (a: string, b: string) => (Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`)) / 86_400_000;
@@ -126,8 +136,7 @@ export function doutesFacture(item: InboxFacture, ctx: ContexteValidation): Dout
   const base = ctx.recuLe ?? ctx.aujourdhui;
   if (!item.dateFacture || !/^\d{4}-\d{2}-\d{2}$/.test(item.dateFacture)) d.push("sans_date");
   else if (jours(item.dateFacture, base) > JOURS_FUTUR || jours(item.dateFacture, ctx.aujourdhui) > JOURS_FUTUR) d.push("date_future");
-  else if (jours(base, item.dateFacture) > JOURS_PASSE) d.push("date_ancienne");
-  else if (item.dateFacture.slice(0, 7) < moisPrecedent(ctx.aujourdhui)) d.push("mois_ancien");
+  else if (dateDouteuse(item.dateFacture, base)) d.push("date_ancienne");
 
   const textes = [item.source.subject, item.source.attachment, item.numero].filter(Boolean).join(" ");
   const annonceAvoir = MOTS_AVOIR.test(textes);

@@ -14,6 +14,8 @@ export interface AutoResult {
   ignores?: number;
   /** Nombre de factures en attente par raison (une facture peut en avoir plusieurs). */
   raisons?: Partial<Record<Doute, number>>;
+  /** Diagnostic : écrit dans les journaux Vercel (privés), jamais renvoyé (le journal GitHub Actions est public). */
+  exemples?: { raisons: Doute[]; fournisseur: string; de: string; ht?: number; tva?: number; ttc?: number; date?: string; recu?: string; lecture?: string; erreur?: string }[];
 }
 
 const parisJour = (t = Date.now()) => new Date(t).toLocaleDateString("en-CA", { timeZone: "Europe/Paris" });
@@ -124,6 +126,19 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
       out.enDoute++;
       out.raisons ??= {};
       for (const x of doutes) out.raisons[x] = (out.raisons[x] ?? 0) + 1;
+      if ((out.exemples ??= []).length < 40)
+        out.exemples.push({
+          raisons: doutes,
+          fournisseur: item.fournisseur.slice(0, 40),
+          de: email.split("@")[1] ?? "",
+          ht: item.montantHT,
+          tva: item.montantTVA,
+          ttc: item.montantTTC,
+          date: item.dateFacture,
+          recu: item.source?.receivedAt?.slice(0, 10),
+          lecture: item.lecture,
+          erreur: item.lectureErreur?.slice(0, 80),
+        });
       const avant = (d.get("doutes") as Doute[] | undefined) ?? [];
       if (avant.join() !== doutes.join()) await d.ref.update({ doutes });
       continue;
@@ -169,5 +184,7 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
       invoices.push({ supplierId: fiche?.id ?? "", nom, numero, date: item.dateFacture ?? "", ttc: item.montantTTC! });
     }
   }
+  if (out.exemples?.length) console.log(`auto-validation ${rid} doutes:`, JSON.stringify(out.exemples));
+  delete out.exemples;
   return out;
 }

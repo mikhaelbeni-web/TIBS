@@ -31,15 +31,19 @@ describe("doutesFacture", () => {
     expect(doutesFacture(facture({ numero: "" }), ctx())).toEqual(["sans_numero"]);
     expect(doutesFacture(facture({ dateFacture: "2026-12-01" }), ctx())).toEqual(["date_future"]);
     expect(doutesFacture(facture({ dateFacture: "2025-01-01" }), ctx())).toEqual(["date_ancienne"]);
+    // Reprise depuis janvier : facture de mars reçue en mars ou en retard, acceptée.
+    expect(doutesFacture(facture({ dateFacture: "2026-03-14" }), ctx({ recuLe: "2026-03-15" }))).toEqual([]);
+    expect(doutesFacture(facture({ dateFacture: "2026-03-14" }), ctx({ recuLe: "2026-07-01" }))).toEqual([]);
     // Jour et mois inversés (11/04 au lieu de 04/11) : trop loin avant le mail.
     expect(doutesFacture(facture({ dateFacture: "2026-04-11" }), ctx())).toEqual(["date_ancienne"]);
-    expect(doutesFacture(facture({ dateFacture: "2026-09-20" }), ctx({ recuLe: "2026-10-01" }))).toEqual(["mois_ancien"]);
+    expect(doutesFacture(facture({ dateFacture: "2026-09-20" }), ctx({ recuLe: "2026-10-01" }))).toEqual([]);
     expect(doutesFacture(facture({ dateFacture: "2026-10-20" }), ctx())).toEqual([]);
     expect(doutesFacture(facture({ source: { messageId: "m", subject: "Votre relevé de factures octobre" } }), ctx())).toEqual(["type_document"]);
     expect(doutesFacture(facture({ source: { messageId: "m", attachment: "BL_12345.pdf" } }), ctx())).toEqual(["type_document"]);
     expect(doutesFacture(facture({ source: { messageId: "m", subject: "Facture FAC-20261009 Blé" } }), ctx())).toEqual([]);
     expect(doutesFacture(facture({ etablissementPdf: "17e" }), ctx())).toEqual(["autre_restaurant"]);
-    expect(doutesFacture(facture({ montantHT: 250_000, montantTVA: 13_750, montantTTC: 263_750 }), ctx({ fournisseurNouveau: true }))).toEqual(["montant_eleve"]);
+    expect(doutesFacture(facture({ montantHT: 250_000, montantTVA: 13_750, montantTTC: 263_750 }), ctx({ fournisseurNouveau: true }))).toEqual([]);
+    expect(doutesFacture(facture({ montantHT: 550_000, montantTVA: 30_250, montantTTC: 580_250 }), ctx({ fournisseurNouveau: true }))).toEqual(["montant_eleve"]);
     expect(doutesFacture(facture({ montantHT: 250_000, montantTVA: 13_750, montantTTC: 263_750 }), ctx())).toEqual([]);
     // Dès qu'une facture du fournisseur existe, plus de plafond fixe.
     expect(doutesFacture(facture({ montantHT: 446_796, montantTVA: 24_574, montantTTC: 471_370 }), ctx({ historiqueTTC: [380_000] }))).toEqual([]);
