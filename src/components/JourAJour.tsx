@@ -317,6 +317,13 @@ export function JourAJour({
                         Compensé par le crédit du {fr(cb.voisin.credit)} ({formatEuros(cb.voisin.ecart)}) : un paiement est passé sur le jour voisin.
                       </p>
                     )}
+                    {cb.remiseExacte && (
+                      <p className="text-xs text-muted">
+                        {cb.remiseExacte.sens === "manquant"
+                          ? `Les ${formatEuros(cb.remiseExacte.remise.amount)} manquants sont arrivés le ${fr(cb.remiseExacte.remise.date)} (${cb.remiseExacte.remise.libelle.slice(0, 34)}) : un TPE les a envoyés un jour plus tard.`
+                          : `La remise de ${formatEuros(cb.remiseExacte.remise.amount)} (${cb.remiseExacte.remise.libelle.slice(0, 34)}) a exactement le montant de l'excédent : elle contient sans doute des paiements de la journée précédente, envoyés en retard.`}
+                      </p>
+                    )}
                     {cb.cumul && <Ligne label={`Écart cumulé depuis le ${fr(cb.cumul.depuis)}`}>{formatEuros(cb.cumul.ecart)}</Ligne>}
                     <p className="text-xs text-muted">
                       Les CB d&apos;une journée sont créditées le jour bancaire suivant (samedi soir et dimanche : le lundi). La date dans le libellé est celle de
