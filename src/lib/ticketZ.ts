@@ -94,6 +94,12 @@ export interface ComparaisonCB {
   joursCouverts?: CashLine[];
   /** Un paiement est passé sur le jour voisin : les deux écarts se compensent. */
   voisin?: { credit: string; ecart: number };
+  /**
+   * Une seule remise a exactement le montant de l'écart : envoyée un jour plus tard par un TPE.
+   * manquant : l'argent manquant est arrivé au crédit suivant ; excedent : cette remise contient
+   * des paiements de la journée précédente.
+   */
+  remiseExacte?: { sens: "manquant" | "excedent"; remise: BankLine };
   /** Écart cumulé du mois, remises par jour de crédit contre CB des journées couvertes. */
   cumul?: { depuis: string; caisse: number; banque: number; ecart: number };
   /** Crédits bancaires des jours suivants, pour vérifier à l'œil quand rien n'est rapproché. */
@@ -146,6 +152,7 @@ function parCredit(
   const ecart = g.banque - g.caisse;
   let statut: Statut = Math.abs(ecart) <= TOLERANCE_CB ? "ok" : "ecart";
   let voisin: ComparaisonCB["voisin"];
+  let remiseExacte: ComparaisonCB["remiseExacte"];
   if (statut === "ecart") {
     for (const v of [groupes[i - 1], groupes[i + 1]]) {
       if (!v || !v.caisse) continue;
@@ -157,8 +164,21 @@ function parCredit(
       }
     }
   }
-  const mois = jour.slice(0, 7);
-  const duMois = groupes.slice(0, i + 1).filter((x) => x.caisse > 0 && x.jours.every((c) => c.date.startsWith(mois)));
+  if (statut === "ecart") {
+    // Vu sur octobre 2026 : 153,70 €, 162,05 €, 82,30 € manquants retrouvés au centime dans le crédit suivant.
+    const r =
+      ecart < 0
+        ? groupes[i + 1]?.remises.find((b) => b.amount === -ecart)
+        : g.remises.find((b) => b.amount === ecart);
+    if (r) {
+      statut = "proche";
+      remiseExacte = { sens: ecart < 0 ? "manquant" : "excedent", remise: r };
+    }
+  }
+  // Cumul : depuis le premier crédit des journées du mois (ou ce crédit, s'il chevauche deux mois).
+  const debutMois = `${jour.slice(0, 7)}-01`;
+  const premier = groupes.findIndex((x) => x.jours.length > 0 && x.jours[0].date >= debutMois);
+  const duMois = groupes.slice(premier < 0 || premier > i ? i : premier, i + 1).filter((x) => x.caisse > 0);
   const cumul = duMois.length
     ? (() => {
         const caisse = duMois.reduce((t, x) => t + x.caisse, 0);
@@ -174,6 +194,7 @@ function parCredit(
     remises: g.remises,
     joursCouverts: g.jours,
     ...(voisin ? { voisin } : {}),
+    ...(remiseExacte ? { remiseExacte } : {}),
     ...(cumul ? { cumul } : {}),
   };
 }

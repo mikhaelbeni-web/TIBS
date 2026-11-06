@@ -184,6 +184,47 @@ describe("remises CB Caisse d'Épargne (relevé réel d'octobre 2026)", () => {
   });
 });
 
+describe("remises CB, début novembre 2026 (captures de Jour à jour)", () => {
+  const credits: [string, string, number[]][] = [
+    ["2026-11-02", "011126", [171850, 205400, 177450, 16100, 12550, 11500, 15550, 20600, 31350, 11000, 143150, 15950]],
+    ["2026-11-02", "021126", [7800, 19650, 18200, 30300, 39350, 24350, 20150, 114000, 49750, 3500, 218850, 249750]],
+    ["2026-11-03", "031126", [70950, 70250, 41600, 16350]],
+    ["2026-11-03", "021126", [30150, 14750, 6160, 10800, 18150, 15650, 8250]],
+    ["2026-11-04", "041126", [28300, 5400, 9400, 92800, 132750, 11700, 76400, 32700]],
+    ["2026-11-04", "031126", [16185]],
+    ["2026-11-05", "051126", [141833, 6250, 70450, 6655, 24050, 5450, 39000, 35300]],
+    ["2026-11-05", "041126", [17170]],
+  ];
+  const lignes = credits.flatMap(([date, code, montants]) =>
+    montants.map((amount, i) => ({ id: `${date}-${code}-${i}`, date, amount, libelle: `CB TIB S ${code} CONTRAT 8060565` })),
+  );
+  const caisse = [
+    ["2026-10-31", 842850],
+    ["2026-11-01", 825800],
+    ["2026-11-02", 272910],
+    ["2026-11-03", 429255],
+    ["2026-11-04", 336755],
+  ].map(([date, amount]) => ({ id: String(date), date: String(date), amount: Number(amount) }));
+  const cb = (jour: string) => comparerCB(jour, caisse, lignes, { today: "2026-11-06" });
+
+  it("week-end de la Toussaint : samedi + dimanche contre le crédit du lundi", () => {
+    expect(cb("2026-11-01")).toMatchObject({ statut: "ecart", caisse: 1668650, ecart: -40550, cumul: { depuis: "2026-10-31", ecart: -40550 } });
+  });
+  it("excédent égal au centime à une remise : envoyée en retard, signalée", () => {
+    const r = cb("2026-11-02");
+    expect(r).toMatchObject({ statut: "proche", ecart: 30150, remiseExacte: { sens: "excedent", remise: { amount: 30150 } } });
+  });
+  it("écarts sans remise correspondante restent des écarts ; cumul depuis le 02/11", () => {
+    expect(cb("2026-11-03")).toMatchObject({ statut: "ecart", ecart: -23620 });
+    expect(cb("2026-11-04")).toMatchObject({ statut: "ecart", ecart: 9403, cumul: { depuis: "2026-11-02", caisse: 1038920, banque: 1054853, ecart: 15933 } });
+  });
+  it("montant manquant retrouvé au centime dans le crédit suivant", () => {
+    const tard = [...lignes, { id: "tard", date: "2026-11-05", amount: 23620, libelle: "CB TIB S 041126 CONTRAT 8060564" }];
+    const r = comparerCB("2026-11-03", caisse, tard, { today: "2026-11-06" });
+    expect(r).toMatchObject({ statut: "proche", remiseExacte: { sens: "manquant", remise: { id: "tard", date: "2026-11-05" } } });
+  });
+});
+
 describe("export Historique des commandes du Manager Uber Eats", () => {
   // En-têtes déjà normalisés comme le fait readSpreadsheet.
   const ligne = (date: string, heure: string, montant: string, statut = "completed") => ({
