@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rowsToUberJours } from "../cashImport";
-import { categorie, comparerCB, comparerUber, comparerUberJour, controleTotal, jourDuTicket, semaineUber, totaux } from "../ticketZ";
+import { categorie, comparerCB, comparerUber, comparerUberJour, controleTotal, estRemiseCB, jourDuTicket, semaineUber, totaux } from "../ticketZ";
 
 describe("ticket Z", () => {
   it("un Z clôturé après minuit appartient à la veille", () => {
@@ -114,27 +114,73 @@ describe("semaine Uber du récap mail", () => {
   });
 });
 
-import { codeLibelle, remisesDuJour } from "../ticketZ";
-
-describe("remises CB Caisse d'Épargne", () => {
-  const lignes = [
-    { id: "1", date: "2026-10-31", amount: 120000, libelle: "CB TIB S 301026 CONTRAT 8060564" },
-    { id: "2", date: "2026-10-31", amount: 30050, libelle: "CB TIB S 301026 CONTRAT 8060565" },
-    { id: "3", date: "2026-10-31", amount: -45, libelle: "CB COM TIB S 301026" },
-    { id: "4", date: "2026-10-31", amount: -12, libelle: "CB COM TIB S 301026" },
-    { id: "5", date: "2026-11-01", amount: 99000, libelle: "CB TIB S 311026" },
+describe("remises CB Caisse d'Épargne (relevé réel d'octobre 2026)", () => {
+  // Remises par jour de crédit et date de libellé, montants en centimes.
+  const brut: [string, string, number[]][] = [
+    ["2026-10-15", "151026", [12900, 13400, 14050, 31800, 56850, 64660, 103600, 130800]],
+    ["2026-10-16", "151026", [1000, 10850, 14100, 21550, 22160, 22800, 28750]],
+    ["2026-10-16", "161026", [49600, 53150, 93000, 149850]],
+    ["2026-10-17", "161026", [3900, 7750, 7850, 10200, 17850, 37450]],
+    ["2026-10-19", "181026", [8300, 8800, 9250, 10350, 10400, 12600, 13750, 14050, 24100, 24200, 24300, 31850, 35150, 60650, 66450, 76150, 143650]],
+    ["2026-10-19", "191026", [1200, 14100, 27950, 94200, 94450, 112350, 226350]],
+    ["2026-10-20", "191026", [10250, 10360, 42775]],
+    ["2026-10-20", "201026", [7550, 32450, 68450, 91650, 107400]],
+    ["2026-10-21", "191026", [16205]],
+    ["2026-10-21", "201026", [4750, 8000, 10050, 10700, 15300, 31785, 33400]],
+    ["2026-10-21", "211026", [46350, 85150, 87200, 162200]],
   ];
-  it("code JJMMAA", () => expect(codeLibelle("2026-10-30")).toBe("301026"));
-  it("additionne les contrats TPE et isole les frais", () => {
-    expect(remisesDuJour("2026-10-30", lignes)).toMatchObject({ remises: [{ id: "1" }, { id: "2" }], frais: 57 });
+  const lignes = [
+    ...brut.flatMap(([date, code, montants]) =>
+      montants.map((amount, i) => ({ id: `${date}-${code}-${i}`, date, amount, libelle: `CB TIB S ${code} CONTRAT 806056` })),
+    ),
+    { id: "com", date: "2026-10-19", amount: -653, libelle: "CB COM TIB S 181026" },
+    { id: "swile", date: "2026-10-19", amount: 26334, libelle: "VIR SEPA SWILE" },
+  ];
+  // CB par service, export « Détails par service » de L'Addition.
+  const caisse = [
+    ["2026-10-15", 469235],
+    ["2026-10-16", 85000],
+    ["2026-10-17", 463200],
+    ["2026-10-18", 683400],
+    ["2026-10-19", 387090],
+    ["2026-10-20", 494885],
+  ].map(([date, amount]) => ({ id: String(date), date: String(date), amount: Number(amount) }));
+  const cb = (jour: string) => comparerCB(jour, caisse, lignes.filter((l) => l.amount > 0), { lignes, today: "2026-11-05" });
+
+  it("reconnaît les remises, pas les frais ni les virements", () => {
+    expect(estRemiseCB(lignes[0])).toBe(true);
+    expect(estRemiseCB({ id: "c", date: "d", amount: -653, libelle: "CB COM TIB S 181026" })).toBe(false);
+    expect(estRemiseCB({ id: "s", date: "d", amount: 26334, libelle: "VIR SEPA SWILE" })).toBe(false);
   });
-  it("CB du Z = somme des remises du jour", () => {
-    const r = comparerCB("2026-10-30", [{ id: "z", date: "2026-10-30", amount: 150050 }], lignes.filter((l) => l.amount > 0), { lignes, today: "2026-11-05" });
-    expect(r).toMatchObject({ statut: "ok", ecart: 0, frais: 57, banque: { montant: 150050, jours: 1 } });
+  it("une journée = remises créditées le jour bancaire suivant, quelle que soit la date du libellé", () => {
+    expect(cb("2026-10-16")).toMatchObject({ statut: "ok", caisse: 85000, ecart: 0, banque: { date: "2026-10-17", montant: 85000, jours: 1 } });
+    expect(cb("2026-10-15")).toMatchObject({ statut: "ecart", banque: { date: "2026-10-16", montant: 466810 }, ecart: -2425 });
   });
-  it("écart si la somme ne colle pas", () => {
-    const r = comparerCB("2026-10-30", [{ id: "z", date: "2026-10-30", amount: 160000 }], [], { lignes, today: "2026-11-05" });
-    expect(r).toMatchObject({ statut: "ecart", ecart: -9950 });
+  it("samedi soir et dimanche sont crédités ensemble le lundi", () => {
+    const r = cb("2026-10-18");
+    expect(r).toMatchObject({ caisse: 1146600, banque: { date: "2026-10-19", montant: 1144600 }, ecart: -2000 });
+    expect(r.joursCouverts?.map((c) => c.date)).toEqual(["2026-10-17", "2026-10-18"]);
+    expect(cb("2026-10-17").banque?.date).toBe("2026-10-19");
+  });
+  it("un paiement envoyé une nuit plus tard : les deux jours se compensent", () => {
+    expect(cb("2026-10-19")).toMatchObject({ statut: "proche", ecart: -16205, voisin: { credit: "2026-10-21", ecart: 16205 } });
+    expect(cb("2026-10-20")).toMatchObject({ statut: "proche", ecart: 16205, voisin: { credit: "2026-10-20", ecart: -16205 } });
+  });
+  it("écart cumulé du mois", () => {
+    expect(cb("2026-10-20").cumul).toEqual({ depuis: "2026-10-15", caisse: 2582810, banque: 2578385, ecart: -4425 });
+  });
+  it("pas encore crédité → attente", () => {
+    const r = comparerCB("2026-10-21", [{ id: "z", date: "2026-10-21", amount: 400000 }], [], { lignes, today: "2026-10-22" });
+    expect(r.statut).toBe("attente");
+  });
+  it("le piège du libellé : « 021126 » crédité le 02/11 appartient au dimanche, pas au lundi", () => {
+    const nov = [
+      { id: "a", date: "2026-11-02", amount: 795650, libelle: "CB TIB S 021126 CONTRAT 806056" },
+      { id: "b", date: "2026-11-03", amount: 103910, libelle: "CB TIB S 021126 CONTRAT 806056" },
+      { id: "c", date: "2026-11-03", amount: 169000, libelle: "CB TIB S 031126 CONTRAT 806056" },
+    ];
+    const r = comparerCB("2026-11-02", [{ id: "z", date: "2026-11-02", amount: 272910 }], nov, { today: "2026-11-05" });
+    expect(r).toMatchObject({ statut: "ok", ecart: 0, banque: { date: "2026-11-03", montant: 272910 } });
   });
 });
 
