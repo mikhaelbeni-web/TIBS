@@ -14,11 +14,13 @@ import { readSpreadsheet, rowToBank } from "@/lib/importer";
 import { apparierImports, sansDoublonsImport } from "@/lib/banque";
 import { formatEuros, toCents } from "@/lib/money";
 import { reconcile, reconcileDeposits, type BankLine, type CashLine } from "@/lib/reconcile";
+import { pointageMoisCB, type Statut } from "@/lib/ticketZ";
 import type { BankTransaction, CashEntry, UberJourDoc, UberPayout, WithId } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 
 const fr = (iso: string) => iso.split("-").reverse().join("/");
 const thisMonth = () => new Date().toISOString().slice(0, 7);
+const TONS_CB: Record<Statut, "green" | "red" | "orange" | "neutral"> = { ok: "green", proche: "orange", ecart: "red", attente: "orange", absent: "neutral" };
 
 function monthBounds(mois: string, extraDays: number) {
   const [y, m] = mois.split("-").map(Number);
@@ -59,17 +61,22 @@ export default function RapprochementPage() {
   );
   const monthBank = useMemo(() => bank.items.filter((b) => b.date >= start && b.date <= end), [bank.items, start, end]);
 
-  const cb = useMemo(() => {
-    const cashLines: CashLine[] = days.map((d) => ({ id: d.id, date: d.date, amount: d.cb }));
-    const bankLines: BankLine[] = credits
-      .filter((b) => !isCashDeposit(b.libelle) && !isUber(b.libelle))
-      .map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle, ...(b.valeur ? { valeur: b.valeur } : {}) }));
-    return reconcile(cashLines, bankLines, {
-      maxDays: Number(maxDays) || 5,
-      maxFeeRate: (Number(maxFee.replace(",", ".")) || 0) / 100,
-      tolerance: 1,
-    });
-  }, [days, credits, maxDays, maxFee]);
+  // CB : même règle que « Jour à jour » (remises d'un jour de crédit comparées ensemble aux journées qu'elles couvrent).
+  const cbCaisse: CashLine[] = useMemo(() => cash.items.map((d) => ({ id: d.id, date: d.date, amount: d.cb })), [cash.items]);
+  const toutesLignes: BankLine[] = useMemo(
+    () => bank.items.map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle, ...(b.valeur ? { valeur: b.valeur } : {}) })),
+    [bank.items],
+  );
+  const cb = useMemo(
+    () =>
+      pointageMoisCB(
+        mois,
+        cbCaisse,
+        toutesLignes.filter((b) => b.amount > 0 && !isCashDeposit(b.libelle) && !isUber(b.libelle)),
+        { maxDays: Number(maxDays) || 5, maxFeeRate: (Number(maxFee.replace(",", ".")) || 0) / 100, lignes: toutesLignes },
+      ),
+    [mois, cbCaisse, toutesLignes, maxDays, maxFee],
+  );
 
   const esp = useMemo(() => {
     const cashLines: CashLine[] = days.map((d) => ({ id: d.id, date: d.date, amount: d.especes }));
@@ -92,7 +99,7 @@ export default function RapprochementPage() {
   const uberById = new Map(uber.items.map((u) => [u.id, u]));
 
   const totalCbCaisse = days.reduce((s, d) => s + d.cb, 0);
-  const totalCbBanque = cb.matches.reduce((s, m) => s + m.bank.amount, 0);
+  const totalCbBanque = cb.groupes.reduce((s, g) => s + (g.banque?.montant ?? 0), 0);
   const totalEsp = days.reduce((s, d) => s + d.especes, 0);
   const totalEspDeposes = esp.matches.reduce((s, m) => s + m.deposit.amount, 0);
 
@@ -337,7 +344,7 @@ export default function RapprochementPage() {
         <Card>
           <div className="text-xs text-muted">CB pointée en banque</div>
           <div className="text-lg font-semibold tabular-nums">{formatEuros(totalCbBanque)}</div>
-          <div className="text-xs text-muted">{cb.unmatchedCash.length} jour(s) non pointé(s)</div>
+          <div className="text-xs text-muted">{cb.sansRemise.length} jour(s) non pointé(s)</div>
         </Card>
         <Card><div className="text-xs text-muted">Espèces caisse</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totalEsp)}</div></Card>
         <Card>
@@ -372,49 +379,60 @@ export default function RapprochementPage() {
         <div className="space-y-4">
           {days.length === 0 && <Empty>Aucune journée de caisse ce mois-ci. Importez votre export ou ajoutez une journée.</Empty>}
           <ul className="space-y-2">
-            {cb.matches.map((m) => {
-              const rate = m.cash.amount ? (-m.ecart / m.cash.amount) * 100 : 0;
+            {cb.groupes.map((g) => {
+              const jours = g.joursCouverts ?? [];
+              const ecart = g.ecart ?? 0;
               return (
-                <li key={m.cash.id}>
-                  <Card className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-medium">Caisse du {fr(m.cash.date)} · {formatEuros(m.cash.amount)}</div>
-                      <div className="truncate text-sm text-muted">
-                        Banque le {fr(m.bank.date)} (J+{m.days}) · {formatEuros(m.bank.amount)} · {m.bank.libelle}
+                <li key={`${g.banque?.date}-${jours[0]?.date ?? ""}`}>
+                  <Card className="space-y-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-medium">
+                          Caisse du {jours.length ? jours.map((j) => fr(j.date).slice(0, 5)).join(" + ") : fr(g.banque?.date ?? "")} · {formatEuros(g.caisse)}
+                        </div>
+                        <div className="text-sm text-muted">
+                          Banque le {fr(g.banque?.date ?? "")} · {formatEuros(g.banque?.montant ?? 0)}
+                          {g.remises ? ` · ${g.remises.length} remise${g.remises.length > 1 ? "s" : ""}` : ` · ${g.banque?.libelle ?? ""}`}
+                          {g.remises?.some((b) => b.valeur && b.valeur < b.date) ? " (dont lots du matin)" : ""}
+                        </div>
                       </div>
+                      <Badge tone={TONS_CB[g.statut]}>{Math.abs(ecart) <= 100 ? "OK" : formatEuros(ecart)}</Badge>
                     </div>
-                    <Badge tone={m.ecart === 0 ? "green" : "neutral"}>
-                      {m.ecart === 0 ? "OK" : `${formatEuros(m.ecart)} (${rate.toFixed(2)} %)`}
-                    </Badge>
+                    {g.voisin && <p className="text-xs text-muted">Compensé par le crédit du {fr(g.voisin.credit)} ({formatEuros(g.voisin.ecart)}).</p>}
+                    {g.sansRemise && <p className="text-xs text-muted">Petit manque en remise CB : paiement saisi « CB » en caisse et non passé au TPE, à vérifier.</p>}
                   </Card>
                 </li>
               );
             })}
           </ul>
-          {cb.unmatchedCash.length > 0 && (
+          {cb.sansRemise.length > 0 && (
             <Card className="border-danger/30">
               <div className="mb-2 font-medium text-danger">Jours de caisse sans remise CB trouvée</div>
               <ul className="space-y-1 text-sm">
-                {cb.unmatchedCash.map((c) => (
-                  <li key={c.id} className="flex justify-between gap-2"><span>{fr(c.date)}</span><span className="tabular-nums">{formatEuros(c.amount)}</span></li>
+                {cb.sansRemise.map(({ jour, statut }) => (
+                  <li key={jour.id} className="flex justify-between gap-2">
+                    <span>{fr(jour.date)}{statut === "attente" ? " · en attente" : ""}</span>
+                    <span className="tabular-nums">{formatEuros(jour.amount)}</span>
+                  </li>
                 ))}
               </ul>
               <p className="mt-2 text-xs text-muted">
-                Causes fréquentes : remise pas encore créditée, plusieurs jours regroupés, commission au-delà du seuil, transaction annulée en caisse.
+                Causes fréquentes : remise pas encore créditée, relevé pas encore à jour, transaction annulée en caisse.
               </p>
             </Card>
           )}
-          {cb.unmatchedBank.length > 0 && (
+          {cb.remisesSeules.length > 0 && (
             <Card className="border-warning/30">
-              <div className="mb-2 font-medium text-warning">Crédits bancaires non rattachés</div>
+              <div className="mb-2 font-medium text-warning">Remises CB sans journée de caisse</div>
               <ul className="space-y-1 text-sm">
-                {cb.unmatchedBank.map((b) => (
+                {cb.remisesSeules.map((b) => (
                   <li key={b.id} className="flex justify-between gap-2">
                     <span className="truncate">{fr(b.date)} · {b.libelle}</span>
                     <span className="shrink-0 tabular-nums">{formatEuros(b.amount)}</span>
                   </li>
                 ))}
               </ul>
+              <p className="mt-2 text-xs text-muted">Journée de caisse pas encore relevée dans L&apos;Addition, ou restaurant fermé ce jour-là.</p>
             </Card>
           )}
         </div>

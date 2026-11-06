@@ -380,6 +380,50 @@ export function comparerCB(
   };
 }
 
+export interface PointageMoisCB {
+  /** Un rapprochement par jour de crédit (ou par journée hors format Caisse d'Épargne), dans l'ordre des dates. */
+  groupes: ComparaisonCB[];
+  /** Journées du mois avec de la CB en caisse et aucune remise trouvée. */
+  sansRemise: { jour: CashLine; statut: Statut }[];
+  /** Remises CB créditées dans le mois et rattachées à aucune journée de caisse. */
+  remisesSeules: BankLine[];
+}
+
+/**
+ * Pointage CB d'un mois avec la même règle que « Jour à jour » : les remises d'un jour de crédit (plusieurs TPE, lots
+ * du matin, week-end) sont comparées ensemble aux journées de caisse qu'elles couvrent, au lieu d'une remise par
+ * journée. Les journées des 10 jours d'avant servent à savoir quelles remises du début du mois sont déjà rattachées.
+ */
+export function pointageMoisCB(
+  mois: string,
+  joursCaisse: CashLine[],
+  credits: BankLine[],
+  options: { maxDays?: number; maxFeeRate?: number; today?: string; lignes?: BankLine[] } = {},
+): PointageMoisCB {
+  const lignes = options.lignes ?? credits;
+  const avant = new Date(Date.parse(`${mois}-01T00:00:00Z`) - 10 * 86400000).toISOString().slice(0, 10);
+  const jours = joursCaisse.filter((c) => c.amount > 0 && c.date >= avant && c.date <= `${mois}-31`).sort((a, b) => a.date.localeCompare(b.date));
+  const groupes = new Map<string, ComparaisonCB>();
+  const utilisees = new Set<string>();
+  const sansRemise: PointageMoisCB["sansRemise"] = [];
+  for (const c of jours) {
+    const r = comparerCB(c.date, joursCaisse, credits, { ...options, lignes });
+    r.remises?.forEach((b) => utilisees.add(b.id));
+    const duMois = c.date.startsWith(mois) || !!r.joursCouverts?.some((j) => j.date.startsWith(mois));
+    if (!r.banque) {
+      if (c.date.startsWith(mois)) sansRemise.push({ jour: c, statut: r.statut });
+      continue;
+    }
+    const cle = r.remises ? `credit:${r.banque.date}` : `jour:${c.date}`;
+    if (duMois && !groupes.has(cle)) groupes.set(cle, r);
+  }
+  return {
+    groupes: [...groupes.values()].sort((a, b) => (a.banque?.date ?? "").localeCompare(b.banque?.date ?? "")),
+    sansRemise,
+    remisesSeules: lignes.filter((b) => estRemiseCB(b) && b.date.startsWith(mois) && !utilisees.has(b.id)).sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
 /** Semaine de versement Uber (lundi → dimanche) contenant le jour. */
 export function semaineUber(jour: string): { debut: string; fin: string } {
   const dow = (new Date(`${jour}T00:00:00Z`).getUTCDay() + 6) % 7; // 0 = lundi

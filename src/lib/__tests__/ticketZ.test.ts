@@ -11,6 +11,7 @@ import {
   deduireValeurs,
   estRemiseCB,
   jourDuTicket,
+  pointageMoisCB,
   semaineUber,
   totaux,
 } from "../ticketZ";
@@ -198,6 +199,29 @@ describe("remises CB Caisse d'Épargne", () => {
     ]);
     const r = comparerCB("2026-11-02", [{ id: "z", date: "2026-11-02", amount: 100000 }], nov, { today: "2026-11-05" });
     expect(r).toMatchObject({ statut: "ok", ecart: 0, banque: { date: "2026-11-03", montant: 100000 } });
+  });
+  it("pointage du mois : un rapprochement par jour de crédit, toutes remises comprises", () => {
+    const p = pointageMoisCB("2026-10", caisse, lignes.filter((l) => l.amount > 0), { lignes, today: "2026-11-05" });
+    expect(p.groupes.map((g) => [g.banque?.date, g.joursCouverts?.map((j) => j.date), g.ecart])).toEqual([
+      ["2026-10-16", ["2026-10-15"], -2425],
+      ["2026-10-17", ["2026-10-16"], 0],
+      ["2026-10-19", ["2026-10-17", "2026-10-18"], -2000],
+      ["2026-10-20", ["2026-10-19"], -16205],
+      ["2026-10-21", ["2026-10-20"], 16205],
+    ]);
+    expect(p.sansRemise).toEqual([]);
+    // Créditées le 15 : service du 14, absent de la caisse.
+    expect(p.remisesSeules.map((b) => b.amount)).toEqual([40000, 60000]);
+    // Le mois suivant ne reprend pas les journées d'octobre ; leurs remises ne sont pas « seules ».
+    const nov = pointageMoisCB("2026-11", caisse, lignes.filter((l) => l.amount > 0), { lignes, today: "2026-11-05" });
+    expect(nov).toEqual({ groupes: [], sansRemise: [], remisesSeules: [] });
+  });
+  it("pointage du mois : journée sans remise", () => {
+    const p = pointageMoisCB("2026-10", [...caisse, { id: "2026-10-21", date: "2026-10-21", amount: 50000 }], lignes.filter((l) => l.amount > 0), {
+      lignes,
+      today: "2026-10-22",
+    });
+    expect(p.sansRemise).toEqual([{ jour: { id: "2026-10-21", date: "2026-10-21", amount: 50000 }, statut: "attente" }]);
   });
 });
 
