@@ -46,7 +46,16 @@ export interface BilanMoisCB {
      * leurs virements et le manque CB (petits écarts négatifs, jusqu'à 200 €). Proche de 1 sur plusieurs mois = cause trouvée.
      * « decale » : virements reçus 7 jours plus tard que les crédits CB comparés (paiement à la semaine).
      */
-    manque: { tr: number | null; trDecale: number | null; amex: number | null; amexDecale: number | null };
+    manque: {
+      tr: number | null;
+      trDecale: number | null;
+      amex: number | null;
+      amexDecale: number | null;
+      /** Idem sans les titres-restaurant des commandes Uber Eats (récaps du mail), versés eux aussi à part par les émetteurs. */
+      trHorsUber: number | null;
+      trHorsUberDecale: number | null;
+      semainesUberAvecTitres: number;
+    };
     /**
      * Manque CB en % de la CB de caisse (arrondi à 0,1), par jour de service, sur les crédits à moins de 200 € d'écart.
      * Les cartes titre-restaurant ne passent pas le dimanche et peu le samedi : un manque bien plus faible le week-end
@@ -171,7 +180,14 @@ function compter(
  * de la banque, la même règle avec les lots du matin déduits des montants, et sans rien. Octobre 2026 (relevé Caisse
  * d'Épargne) : 9 groupes exacts et 0 positif avec la date de valeur comme en la déduisant, 1 exact et 7 positifs sans.
  */
-export function bilanCB(mois: string, cash: CashLine[], lignes: BankLine[], today = new Date().toISOString().slice(0, 10)): BilanMoisCB {
+export function bilanCB(
+  mois: string,
+  cash: CashLine[],
+  lignes: BankLine[],
+  today = new Date().toISOString().slice(0, 10),
+  /** Titres-restaurant des récaps Uber Eats, datés du dernier jour de la semaine. */
+  titresUber: { fin: string; montant: number }[] = [],
+): BilanMoisCB {
   const sans = lignes.map((b) => ({ id: b.id, date: b.date, amount: b.amount, libelle: b.libelle }));
   const credits = sans.filter((b) => b.amount > 0);
   const remises = sans.filter(estRemiseCB);
@@ -217,9 +233,14 @@ export function bilanCB(mois: string, cash: CashLine[], lignes: BankLine[], toda
         const petit = -ecarts.reduce((t, g) => t + ((g.ecart ?? 0) < -100 && (g.ecart ?? 0) >= -20000 ? (g.ecart ?? 0) : 0), 0);
         const somme = (f: Famille, de: string, a: string) => credits.filter((b) => b.date >= de && b.date <= a && famille(b) === f).reduce((t, b) => t + b.amount, 0);
         const fin = `${mois}-31`;
+        const uber = (de: string, a: string) => titresUber.filter((t) => t.fin >= de && t.fin <= a).reduce((x, t) => x + t.montant, 0);
+        const [d7, f7] = [decale(`${mois}-01`, 7), decale(joursDuMois(mois).at(-1)!, 7)];
         return {
+          trHorsUber: rapport(somme("tr", `${mois}-01`, fin) - uber(`${mois}-01`, fin), petit),
+          trHorsUberDecale: rapport(somme("tr", d7, f7) - uber(`${mois}-01`, fin), petit),
+          semainesUberAvecTitres: titresUber.filter((t) => t.fin.startsWith(mois)).length,
           tr: rapport(somme("tr", `${mois}-01`, fin), petit),
-          trDecale: rapport(somme("tr", decale(`${mois}-01`, 7), decale(joursDuMois(mois).at(-1)!, 7)), petit),
+          trDecale: rapport(somme("tr", d7, f7), petit),
           amex: rapport(somme("amex", `${mois}-01`, fin), petit),
           amexDecale: rapport(somme("amex", decale(`${mois}-01`, 7), decale(joursDuMois(mois).at(-1)!, 7)), petit),
         };

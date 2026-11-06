@@ -373,7 +373,12 @@ describe("contrôle d'un mois en compteurs", () => {
     ];
     const b = bilanCB("2026-10", caisse, lignes, "2026-10-20");
     expect(b.diagnostic.familles).toEqual({ cb: 3, uber: 1, especes: 0, tr: 1, amex: 0, stripe: 0, autre: 1 });
-    expect(b.diagnostic.manque).toEqual({ tr: 1, trDecale: 1, amex: 0, amexDecale: 0 });
+    expect(b.diagnostic.manque).toEqual({ tr: 1, trDecale: 1, amex: 0, amexDecale: 0, trHorsUber: 1, trHorsUberDecale: 1, semainesUberAvecTitres: 0 });
+    // Titres-restaurant d'une semaine Uber Eats versés à part par l'émetteur : retirés avant de comparer.
+    const avecUber = bilanCB("2026-10", caisse, [...lignes, { id: "tr2", date: "2026-10-15", amount: 2000, libelle: "VIR EDENRED" }], "2026-10-20", [
+      { fin: "2026-10-11", montant: 2000 },
+    ]);
+    expect(avecUber.diagnostic.manque).toMatchObject({ tr: 1.45, trHorsUber: 1, semainesUberAvecTitres: 1 });
     expect(b.diagnostic.creditsSansCaisse).toEqual([]);
     // 05/10/2026 = lundi : -2 % ; 06 = mardi : -2 % ; 07 = mercredi : -2 %.
     expect(b.diagnostic.parJour).toEqual({ lun: { credits: 1, pourcent: -2 }, mar: { credits: 1, pourcent: -2 }, mer: { credits: 1, pourcent: -2 } });

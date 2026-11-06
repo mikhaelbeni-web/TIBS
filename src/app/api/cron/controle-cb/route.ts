@@ -48,10 +48,14 @@ async function controler(request: Request) {
       const b = await syncBanque(r.id);
       releve[r.id] = b.status === "ok" ? { status: b.status, nouvelles: b.nouvelles, valeurs: b.valeurs } : { status: b.status };
     }
-    const [cash, bank] = await Promise.all([
+    const [cash, bank, uber] = await Promise.all([
       home.collection("cashEntries").where("date", ">=", debut).where("date", "<=", fin).get(),
       home.collection("bankTransactions").where("date", ">=", debut).where("date", "<=", fin).get(),
+      home.collection("uberPayouts").where("date", ">=", debut).where("date", "<=", fin).get(),
     ]);
+    const titresUber = uber.docs
+      .filter((d) => Number(d.get("titres") ?? 0) > 0 && typeof d.get("fin") === "string")
+      .map((d) => ({ fin: d.get("fin") as string, montant: Number(d.get("titres")) }));
     const caisse = cash.docs.map((d) => ({ id: d.id, date: d.get("date") as string, amount: (d.get("cb") as number) ?? 0 }));
     const lignes = bank.docs.map((d) => {
       const valeur = d.get("valeur") as string | undefined;
@@ -62,7 +66,7 @@ async function controler(request: Request) {
       const docs = cash.docs.filter((d) => String(d.get("date")).startsWith(m));
       return { joursTR: docs.filter((d) => Number(d.get("ticketsResto") ?? 0) > 0).length, joursAutres: docs.filter((d) => Number(d.get("autres") ?? 0) > 0).length };
     };
-    out[r.id] = Object.fromEntries(mois.map((m) => [m, { ...bilanCB(m, caisse, lignes), modesCaisse: modes(m) }]));
+    out[r.id] = Object.fromEntries(mois.map((m) => [m, { ...bilanCB(m, caisse, lignes, undefined, titresUber), modesCaisse: modes(m) }]));
     // &detail=1 : chaque crédit du mois (règle déduite) dans le journal Vercel, privé ; la réponse, publique, reste en compteurs.
     if (q.get("detail") === "1") {
       const sans = lignes.map((b) => ({ id: b.id, date: b.date, amount: b.amount, libelle: b.libelle }));
