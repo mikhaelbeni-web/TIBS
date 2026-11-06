@@ -228,7 +228,7 @@ describe("remises CB : lot envoyé en retard, cumul à cheval sur deux mois", ()
 
 describe("remises CB : date de valeur", () => {
   // Lundi 100 000, mardi 80 000. Un lot de 5 000 du lundi soir est télécollecté le mardi matin : crédité mercredi,
-  // valeur mardi (comme 162,05 € le 21/10/2026). Sans la date de valeur, lundi -50 € et mardi +50 €.
+  // valeur mardi. Sans la date de valeur, lundi -50 € et mardi +50 €.
   const base = [
     ...remisesCB([
       ["2026-10-20", "191026", [60000, 35000]],

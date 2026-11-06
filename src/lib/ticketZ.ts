@@ -189,7 +189,7 @@ function parCredit(
     }
   }
   // Il manque un peu de CB en banque : paiement saisi « CB » en caisse sans remise CB (titre-restaurant carte passé
-  // sur le TPE, payé à part par Edenred, Up, Swile ou Pluxee ; ou paiement refusé au TPE). Octobre 2026 : -13,50 à -118,20 €.
+  // sur le TPE, payé à part par Edenred, Up, Swile ou Pluxee ; ou paiement refusé au TPE). Vu sur octobre 2026 : toujours dans ce sens.
   const sansRemise = statut === "ecart" && ecart < 0 && -ecart <= PLAFOND_SANS_REMISE;
   if (sansRemise) statut = "proche";
   // Cumul : depuis le premier crédit des journées du mois (ou ce crédit, s'il chevauche deux mois).
