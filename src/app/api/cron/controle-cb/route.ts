@@ -47,7 +47,13 @@ export async function GET(request: Request) {
       const valeur = d.get("valeur") as string | undefined;
       return { id: d.id, date: d.get("date") as string, amount: d.get("montant") as number, libelle: (d.get("libelle") as string) ?? "", ...(valeur ? { valeur } : {}) };
     });
-    out[r.id] = Object.fromEntries(mois.map((m) => [m, bilanCB(m, caisse, lignes)]));
+    try {
+      out[r.id] = Object.fromEntries(mois.map((m) => [m, bilanCB(m, caisse, lignes)]));
+    } catch (e) {
+      // Message d'erreur seulement (jamais de données) : la réponse est affichée dans un journal public.
+      const err = e instanceof Error ? `${e.name}: ${e.message} @ ${(e.stack ?? "").split("\n").slice(1, 3).join(" | ")}` : String(e);
+      return Response.json({ erreur: err.slice(0, 400) }, { status: 500 });
+    }
     // &detail=1 : chaque crédit du mois (règle déduite) dans le journal Vercel, privé ; la réponse, publique, reste en compteurs.
     if (q.get("detail") === "1") {
       const sans = lignes.map((b) => ({ id: b.id, date: b.date, amount: b.amount, libelle: b.libelle }));

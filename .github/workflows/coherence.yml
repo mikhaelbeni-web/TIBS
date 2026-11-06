@@ -54,5 +54,5 @@ jobs:
         run: |
           if ! [[ "$MOIS" =~ ^[0-9]{4}-[0-9]{2}(,[0-9]{4}-[0-9]{2})*$ ]]; then echo "mois attendus : AAAA-MM[,AAAA-MM]"; exit 1; fi
           code=$(curl -sS -o out.json -w "%{http_code}" --max-time 320 -H "Authorization: Bearer $CRON_SECRET" "https://tibs.vercel.app/api/cron/controle-cb?mois=$MOIS&releve=$RELEVE&detail=$DETAIL")
-          cat out.json; echo
+          echo "HTTP $code"; cat out.json; echo
           test "$code" = "200"
