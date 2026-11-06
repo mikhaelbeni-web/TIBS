@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { rowsToUberJours } from "../cashImport";
 import { bilanCB } from "../controleCB";
-import { categorie, comparerCB, comparerUber, comparerUberJour, controleTotal, creditEffectif, estRemiseCB, jourDuTicket, semaineUber, totaux } from "../ticketZ";
+import {
+  categorie,
+  comparerCB,
+  comparerUber,
+  comparerUberJour,
+  controleTotal,
+  creditEffectif,
+  deduireValeurs,
+  estRemiseCB,
+  jourDuTicket,
+  semaineUber,
+  totaux,
+} from "../ticketZ";
 
 describe("ticket Z", () => {
   it("un Z clôturé après minuit appartient à la veille", () => {
@@ -267,6 +279,56 @@ describe("remises CB : date de valeur", () => {
   });
 });
 
+describe("remises CB : lot du matin retrouvé sans date de valeur", () => {
+  // Comme le relevé automatique de la Caisse d'Épargne : pas de date de valeur, n° de remise dans le libellé.
+  const lot = (id: string, date: string, amount: number, rem: string) => ({ id, date, amount, libelle: `CB TIB S 000000 CONTRAT 1234565 REM ${rem}` });
+  const lignes = [
+    lot("lun1", "2026-10-20", 60000, "112345"),
+    lot("lun2", "2026-10-20", 35000, "054321"),
+    lot("mar1", "2026-10-21", 80000, "112346"),
+    lot("matin", "2026-10-21", 5000, "012345"),
+    lot("mer1", "2026-10-22", 40000, "112347"),
+    lot("mer2", "2026-10-22", 30000, "054000"),
+  ];
+  const caisse = journees([
+    ["2026-10-19", 100000],
+    ["2026-10-20", 80000],
+    ["2026-10-21", 70000],
+  ]);
+  const cb = (jour: string, l = lignes, c = caisse, deduire = true) => comparerCB(jour, c, l, { today: "2026-11-06", deduire });
+
+  it("le lot du matin revient au service de la veille, les autres restent", () => {
+    const lun = cb("2026-10-19");
+    expect(lun).toMatchObject({ statut: "ok", ecart: 0, banque: { date: "2026-10-20", montant: 100000 } });
+    expect(lun.remises?.find((b) => b.id === "matin")).toMatchObject({ date: "2026-10-21", valeur: "2026-10-20", valeurDeduite: true });
+    expect(cb("2026-10-20")).toMatchObject({ statut: "ok", ecart: 0, banque: { date: "2026-10-21", montant: 80000 } });
+    expect(cb("2026-10-21")).toMatchObject({ statut: "ok", ecart: 0, banque: { date: "2026-10-22", montant: 70000 } });
+    expect([...deduireValeurs(caisse, lignes)]).toEqual([["matin", "2026-10-20"]]);
+  });
+  it("sans déduction, le lot compte à son jour de crédit", () => {
+    expect(cb("2026-10-19", lignes, caisse, false)).toMatchObject({ ecart: -5000 });
+  });
+  it("un lot numéroté 1xxxxx n'est jamais déplacé", () => {
+    const l = lignes.map((b) => (b.id === "matin" ? lot("matin", b.date, b.amount, "112399") : b));
+    expect(deduireValeurs(caisse, l).size).toBe(0);
+    expect(cb("2026-10-19", l)).toMatchObject({ ecart: -5000 });
+  });
+  it("à égalité (deux manques), le lot va à la veille", () => {
+    const l = [lot("a", "2026-10-20", 90000, "112345"), lot("b", "2026-10-21", 80000, "112346"), lot("m", "2026-10-21", 5000, "012345")];
+    const c = journees([
+      ["2026-10-19", 100000],
+      ["2026-10-20", 86000],
+    ]);
+    expect([...deduireValeurs(c, l)]).toEqual([["m", "2026-10-20"]]);
+  });
+  it("pas de déplacement vers un crédit sans journée de caisse", () => {
+    const l = [lot("a", "2026-10-20", 10000, "112345"), lot("b", "2026-10-21", 80000, "112346"), lot("m", "2026-10-21", 5000, "012345")];
+    const c = journees([["2026-10-20", 80000]]);
+    expect(deduireValeurs(c, l).size).toBe(0);
+    expect(cb("2026-10-20", l, c)).toMatchObject({ ecart: 5000 });
+  });
+});
+
 describe("contrôle d'un mois en compteurs", () => {
   it("compte les groupes exacts, en plus et en moins, avec et sans date de valeur", () => {
     const lignes = [
@@ -287,7 +349,35 @@ describe("contrôle d'un mois en compteurs", () => {
     expect(b.jours).toBe(4);
     expect(b.avecValeur).toEqual({ groupes: 3, exacts: 2, negatifs: 1, positifs: 0, sansCredit: 1 });
     expect(b.sansValeur).toEqual({ groupes: 3, exacts: 0, negatifs: 2, positifs: 1, sansCredit: 1 });
+    // Sans n° de remise dans le libellé, rien n'est déduit.
+    expect(b.deduite).toEqual(b.sansValeur);
+    expect(b.lots).toEqual({ possibles: 0, deduits: 0 });
     expect(b.remises).toMatchObject({ remises: 4, avecValeur: 1, valeurAvant: 1, valeurApres: 0 });
+  });
+  it("lot du matin déduit : même résultat qu'avec la date de valeur", () => {
+    const rem = (id: string, date: string, amount: number, n: string, valeur?: string) => ({
+      id,
+      date,
+      amount,
+      libelle: `CB TIB S 000000 CONTRAT 1 REM ${n}`,
+      ...(valeur ? { valeur } : {}),
+    });
+    const lignes = [
+      rem("a", "2026-10-20", 95000, "100001"),
+      rem("b", "2026-10-21", 80000, "100002"),
+      rem("c", "2026-10-22", 69000, "100003"),
+      rem("matin", "2026-10-21", 5000, "000004", "2026-10-20"),
+    ];
+    const caisse = journees([
+      ["2026-10-19", 100000],
+      ["2026-10-20", 80000],
+      ["2026-10-21", 70000],
+      ["2026-10-22", 50000],
+    ]);
+    const b = bilanCB("2026-10", caisse, lignes, "2026-10-23");
+    expect(b.deduite).toEqual(b.avecValeur);
+    expect(b.sansValeur.positifs).toBe(1);
+    expect(b.lots).toEqual({ possibles: 1, deduits: 1 });
   });
 });
 

@@ -13,6 +13,8 @@ export interface BankLine {
   libelle: string;
   /** Date de valeur donnée par la banque (AAAA-MM-JJ), si connue. */
   valeur?: string;
+  /** La date de valeur a été déduite des montants (lot du matin), la banque ne l'ayant pas donnée. */
+  valeurDeduite?: boolean;
 }
 
 export interface MatchOptions {

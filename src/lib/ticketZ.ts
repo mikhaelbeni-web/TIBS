@@ -131,6 +131,103 @@ interface GroupeCB {
  */
 export const creditEffectif = (b: BankLine) => (b.valeur && b.valeur < b.date ? b.valeur : b.date);
 
+/** Numéro de remise du TPE dans le libellé (« … CONTRAT 8060565 REM 012345 »). */
+export const NUMERO_REMISE = /\bREM\s*(\d{6})\b/i;
+
+/**
+ * Lot qu'un TPE peut envoyer le matin, avec les ventes de la veille au soir : numéro de remise commençant par 0.
+ * Vu sur octobre 2026 (Caisse d'Épargne) : 27 lots de ce type, tous du même contrat, 15 envoyés le matin
+ * (date de valeur la veille du crédit) et 12 la nuit ; aucun des 256 lots numérotés 1xxxxx n'est envoyé le matin.
+ */
+export const lotDuMatinPossible = (b: BankLine) => !b.valeur && NUMERO_REMISE.exec(b.libelle)?.[1].startsWith("0") === true;
+
+/** Plus de lots possibles sur un même crédit : au-delà, on ne déduit rien pour ce crédit (64 combinaisons au plus). */
+const MAX_LOTS_DEDUITS = 6;
+
+type Cout = [number, number, number, number];
+const plusPetit = (a: Cout, b: Cout) => {
+  for (let k = 0; k < 4; k++) if (a[k] !== b[k]) return a[k] < b[k];
+  return false;
+};
+
+/**
+ * Le relevé automatique (DSP2) de la Caisse d'Épargne ne donne pas la date de valeur : un lot du matin y a le même
+ * libellé et la même date qu'un lot de la nuit. On le retrouve par les montants. Pour chaque lot possible
+ * (lotDuMatinPossible, crédité le lendemain d'un autre crédit), on choisit de le rattacher au crédit de la veille
+ * ou non, sur toute la période à la fois, pour avoir dans l'ordre : le plus de crédits au centime près, le moins
+ * de crédits avec plus en banque qu'en caisse, le plus petit écart total ; à égalité, le lot va à la veille
+ * (deux lots possibles sur trois le sont). Programmation dynamique d'un crédit au suivant : chaque choix ne
+ * touche que deux crédits voisins.
+ * Vérifié sur octobre 2026 en retirant les dates de valeur : les 14 lots du matin retrouvés, aucun lot de la nuit
+ * déplacé, même résultat qu'avec les dates de valeur. Avec tous les lots du contrat comme candidats, le calcul
+ * trouve des centimes par hasard et se trompe (12 faux) : le filtre sur le numéro est nécessaire.
+ * Renvoie, par id de remise, la date de valeur déduite (le jour du crédit précédent).
+ */
+export function deduireValeurs(joursCaisse: CashLine[], remises: BankLine[], maxDays = 5): Map<string, string> {
+  const groupes = groupesCB(joursCaisse, remises, maxDays);
+  const ecartDe = (g: GroupeCB) => g.banque - g.caisse;
+  const cout = (g: GroupeCB, e: number): Cout =>
+    g.jours.length ? [Math.abs(e) <= 1 ? -1 : 0, e > TOLERANCE_CB ? 1 : 0, Math.abs(e), 0] : [0, 0, 0, 0];
+  // Choix possibles pour chaque crédit : quels lots partent au crédit de la veille.
+  const choix = groupes.map((g, k) => {
+    const veille = groupes[k - 1];
+    const lots =
+      veille && veille.credit === addDays(g.credit, -1) && veille.jours.length && g.jours.length ? g.remises.filter(lotDuMatinPossible) : [];
+    if (lots.length > MAX_LOTS_DEDUITS) return [{ lots: [] as BankLine[], somme: 0 }];
+    const out: { lots: BankLine[]; somme: number }[] = [];
+    for (let m = 0; m < 1 << lots.length; m++) {
+      const pris = lots.filter((_, j) => m & (1 << j));
+      if (pris.length && pris.length === g.remises.length) continue; // le crédit garde au moins une remise
+      out.push({ lots: pris, somme: pris.reduce((t, b) => t + b.amount, 0) });
+    }
+    return out;
+  });
+  if (!choix.some((c) => c.length > 1)) return new Map();
+  // meilleur[k][j] : coût des crédits avant k, quand le crédit k fait le choix j ; d'où[k][j] : choix du crédit k - 1.
+  const meilleur: Cout[][] = [];
+  const dou: number[][] = [];
+  choix.forEach((cs, k) => {
+    meilleur[k] = [];
+    dou[k] = [];
+    cs.forEach((c, j) => {
+      let best: Cout | null = null;
+      let arg = -1;
+      if (k === 0) best = [0, 0, 0, 0];
+      else
+        choix[k - 1].forEach((p, i) => {
+          const g = groupes[k - 1];
+          const d = cout(g, ecartDe(g) - p.somme + c.somme);
+          const t = meilleur[k - 1][i];
+          const v: Cout = [t[0] + d[0], t[1] + d[1], t[2] + d[2], t[3]];
+          if (!best || plusPetit(v, best)) {
+            best = v;
+            arg = i;
+          }
+        });
+      const b = best as unknown as Cout;
+      meilleur[k][j] = [b[0], b[1], b[2], b[3] - c.lots.length];
+      dou[k][j] = arg;
+    });
+  });
+  const n = groupes.length - 1;
+  let fin = 0;
+  let total: Cout | null = null;
+  choix[n].forEach((c, j) => {
+    const d = cout(groupes[n], ecartDe(groupes[n]) - c.somme);
+    const t = meilleur[n][j];
+    const v: Cout = [t[0] + d[0], t[1] + d[1], t[2] + d[2], t[3]];
+    if (!total || plusPetit(v, total)) {
+      total = v;
+      fin = j;
+    }
+  });
+  const out = new Map<string, string>();
+  for (let k = n, j = fin; k >= 0; j = dou[k][j], k--) {
+    for (const b of choix[k][j].lots) out.set(b.id, groupes[k - 1].credit);
+  }
+  return out;
+}
+
 /**
  * Les paiements CB d'une journée de service sont crédités le premier jour bancaire qui suit
  * (le TPE les envoie la nuit ; samedi soir et dimanche arrivent le lundi). La date écrite dans le
@@ -217,6 +314,18 @@ function parCredit(
   };
 }
 
+// Un calcul par jeu de données : la page et le contrôle appellent comparerCB pour chaque journée avec les mêmes tableaux.
+const cacheDeduites = new WeakMap<BankLine[], WeakMap<CashLine[], Map<number, Map<string, string>>>>();
+function deduitesEnCache(joursCaisse: CashLine[], lignes: BankLine[], lues: BankLine[], maxDays: number) {
+  let parCaisse = cacheDeduites.get(lignes);
+  if (!parCaisse) cacheDeduites.set(lignes, (parCaisse = new WeakMap()));
+  let parDelai = parCaisse.get(joursCaisse);
+  if (!parDelai) parCaisse.set(joursCaisse, (parDelai = new Map()));
+  let d = parDelai.get(maxDays);
+  if (!d) parDelai.set(maxDays, (d = deduireValeurs(joursCaisse, lues, maxDays)));
+  return d;
+}
+
 export function comparerCB(
   jour: string,
   joursCaisse: CashLine[],
@@ -227,11 +336,15 @@ export function comparerCB(
     today = new Date().toISOString().slice(0, 10),
     /** Toutes les lignes (débits compris) pour reconnaître les remises par leur libellé. */
     lignes = credits,
-  }: { maxDays?: number; maxFeeRate?: number; today?: string; lignes?: BankLine[] } = {},
+    /** Retrouver par les montants les lots du matin dont la banque ne donne pas la date de valeur. */
+    deduire = true,
+  }: { maxDays?: number; maxFeeRate?: number; today?: string; lignes?: BankLine[]; deduire?: boolean } = {},
 ): ComparaisonCB {
   const caisse = joursCaisse.find((c) => c.date === jour)?.amount ?? 0;
   // 1) Remises CB reconnues au libellé : regroupées par jour de crédit, montant brut.
-  const remises = lignes.filter(estRemiseCB);
+  const lues = lignes.filter(estRemiseCB);
+  const deduites = caisse > 0 && deduire ? deduitesEnCache(joursCaisse, lignes, lues, maxDays) : new Map<string, string>();
+  const remises = deduites.size ? lues.map((b) => (deduites.has(b.id) ? { ...b, valeur: deduites.get(b.id), valeurDeduite: true } : b)) : lues;
   if (caisse > 0 && remises.length) {
     const r = parCredit(jour, joursCaisse, remises, maxDays);
     if (r) return { ...r, candidats: [] };
