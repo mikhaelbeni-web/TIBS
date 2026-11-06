@@ -424,8 +424,8 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000, 
         : d.get("item.incomplet") === true &&
           (force ||
             !["pas_facture", "erreur"].includes(d.get("item.lecture")) ||
-            // PDF refusé par l'API (gratuit) : retenté deux fois par jour, il est réécrit avant d'être renvoyé.
-            (d.get("item.lecture") === "erreur" && /not valid/i.test(String(d.get("item.lectureErreur") ?? "")) && Number(d.get("relu") ?? 0) < Date.now() - 12 * 3_600_000))),
+            // Lecture en erreur (API surchargée, PDF refusé puis réécrit…) : retentée deux fois par jour.
+            (d.get("item.lecture") === "erreur" && Number(d.get("relu") ?? 0) < Date.now() - 12 * 3_600_000))),
   );
   out.restants = docs.length;
   if (!docs.length) return out;
@@ -504,4 +504,58 @@ export async function relireIncomplets(rid: RestaurantId, { budgetMs = 240_000, 
 /** Garde uniquement les champs renseignés (pour ne pas écraser une valeur lue par une valeur vide). */
 function dropEmpty<T extends object>(o: T): Partial<T> {
   return Object.fromEntries(Object.entries(o).filter(([k, v]) => k !== "incomplet" && v !== undefined && v !== "" && v !== null)) as Partial<T>;
+}
+
+const euro = (c?: number) => (c === undefined ? "?" : (c / 100).toFixed(2));
+
+/**
+ * Contre-lecture : une facture dont HT + TVA ne donne pas le TTC est relue une fois par l'IA, en lui
+ * signalant l'écart. Si la nouvelle lecture est cohérente, ses montants remplacent les premiers ;
+ * la validation automatique décide ensuite comme d'habitude.
+ */
+export async function contreLire(rid: RestaurantId, { budgetMs = 60_000 }: { budgetMs?: number } = {}): Promise<{ relus: number; corriges: number }> {
+  const started = Date.now();
+  const out = { relus: 0, corriges: 0 };
+  const home = adminDb().doc(`restaurants/${rid}`);
+  const statusRef = home.collection("settings").doc("mail");
+  const lecteur = lecteurPour((await statusRef.get()).data() ?? {});
+  if (!lecteur.actif) return out;
+  const docs = (await home.collection("inbox").where("statut", "==", "a_verifier").get()).docs.filter(
+    (d) => d.get("item.kind") === "facture" && !d.get("contreLu") && ((d.get("doutes") as string[] | undefined) ?? []).includes("calcul"),
+  );
+  const jetons = new Map<RestaurantId, Promise<string | null>>();
+  for (const d of docs) {
+    if (Date.now() - started > budgetMs || !lecteur.peutLire()) break;
+    const item = d.get("item") as InboxFacture;
+    try {
+      const token = await jetonBoite(item.source?.boite ?? rid, jetons);
+      if (!token) continue;
+      const msg = await getMessage(token, item.source.messageId);
+      const pdfs = pdfAttachments(msg).filter((p) => p.size <= MAX_PDF_BYTES);
+      const pdf = pdfs.find((p) => p.filename === item.source?.attachment) ?? pdfs[0];
+      if (!pdf) {
+        await d.ref.update({ contreLu: Date.now() });
+        continue;
+      }
+      const indice =
+        `Attention : une première lecture donnait HT ${euro(item.montantHT)} € + TVA ${euro(item.montantTVA)} € ≠ TTC ${euro(item.montantTTC)} €. ` +
+        "Relis attentivement le pied de facture : total HT (remises déduites), total TVA (tous taux additionnés), total TTC. " +
+        "montant_ttc = total TTC de la facture ; ignore les acomptes déjà versés et le solde antérieur.";
+      const r = await extractFacture(await pdfData(token, msg, pdf), { from: header(msg, "From"), subject: header(msg, "Subject"), filename: pdf.filename }, lecteur, indice);
+      out.relus++;
+      const maj: Record<string, unknown> = { contreLu: Date.now() };
+      if (r && !estReleve(r) && r.montantHT !== undefined && r.montantTVA !== undefined && r.montantTTC !== undefined && Math.abs(r.montantHT + r.montantTVA - r.montantTTC) <= 2) {
+        Object.assign(maj, { "item.montantHT": r.montantHT, "item.montantTVA": r.montantTVA, "item.montantTTC": r.montantTTC });
+        if (!item.numero && r.numero) maj["item.numero"] = r.numero;
+        out.corriges++;
+      }
+      await d.ref.update(maj);
+    } catch (e) {
+      if (e instanceof GoogleAuthError) break;
+      console.error("contre-lecture", d.id, (e as Error).message);
+      await d.ref.update({ contreLu: Date.now() });
+    }
+  }
+  await enregistrerConsommation(statusRef, lecteur);
+  return out;
 }

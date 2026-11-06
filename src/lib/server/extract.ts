@@ -193,11 +193,13 @@ export async function extractFacture(
   pdfBase64: string,
   ctx: { from: string; subject: string; filename: string },
   lecteur: Lecteur,
+  /** Remarque ajoutée à la demande (contre-lecture après une incohérence). */
+  indice?: string,
 ): Promise<ExtractedFacture | ExtractedReleve | null> {
   const demande = (data: string) =>
     ask(lecteur, FactureSchema, [
       { type: "document", source: { type: "base64", media_type: "application/pdf", data } },
-      { type: "text", text: `${contextLine(ctx)}\n\nDe quel document s'agit-il ? Relève ses informations.` },
+      { type: "text", text: `${contextLine(ctx)}\n\nDe quel document s'agit-il ? Relève ses informations.${indice ? `\n\n${indice}` : ""}` },
     ]);
   let r: z.infer<typeof FactureSchema> | null;
   try {

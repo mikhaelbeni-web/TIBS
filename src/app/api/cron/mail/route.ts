@@ -2,7 +2,7 @@ import { safeEqual } from "@/lib/ingest";
 import { parseReglages, releveDu } from "@/lib/reglages";
 import { RESTAURANTS, type RestaurantId } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
-import { relireIncomplets, syncMail, type SyncResult } from "@/lib/server/mailSync";
+import { contreLire, relireIncomplets, syncMail, type SyncResult } from "@/lib/server/mailSync";
 import { validerAutomatiquement, type AutoResult } from "@/lib/server/autoValider";
 import { releveBanqueDu } from "@/lib/banque";
 import { syncBanque, type BanqueSyncResult } from "@/lib/server/banqueSync";
@@ -42,15 +42,24 @@ export async function GET(request: Request) {
   }
   // Avec le temps restant : relecture des PDF encore « à compléter ».
   const relu: Record<string, unknown> = {};
-  for (const id of dus) {
-    const left = 270_000 - (Date.now() - started);
+  // (les deux restaurants à chaque réveil : les PDF non lus ne doivent pas attendre le prochain relevé des mails)
+  for (const r of RESTAURANTS) {
+    const left = 240_000 - (Date.now() - started);
     if (left < 15_000) break;
-    if (out[id]?.status === "ok") relu[id] = await relireIncomplets(id, { budgetMs: left / 2 });
+    if (out[r.id]?.status !== "erreur") relu[r.id] = await relireIncomplets(r.id, { budgetMs: left / 3 }).catch((e) => ({ erreur: (e as Error).message }));
   }
   // Validation automatique des factures cohérentes, à chaque réveil et pour les deux restaurants (arriéré compris).
+  // Les factures dont HT + TVA ≠ TTC sont relues une fois par l'IA (écart signalé), puis réévaluées.
   const auto: Record<string, AutoResult | { erreur: string }> = {};
+  const contre: Record<string, unknown> = {};
   for (const r of RESTAURANTS) {
     auto[r.id] = await validerAutomatiquement(r.id).catch((e) => ({ erreur: (e as Error).message }));
+    const left = 270_000 - (Date.now() - started);
+    if (left > 20_000 && "raisons" in auto[r.id] && (auto[r.id] as AutoResult).raisons?.calcul) {
+      const c = await contreLire(r.id, { budgetMs: left / 2 }).catch((e) => ({ erreur: (e as Error).message, relus: 0, corriges: 0 }));
+      contre[r.id] = c;
+      if (c.corriges) auto[r.id] = await validerAutomatiquement(r.id).catch((e) => ({ erreur: (e as Error).message }));
+    }
   }
   // Incohérences de l'accueil : recalculées après un relevé bancaire qui a apporté des opérations, sinon toutes les 12 h.
   const incoherences: Record<string, unknown> = {};
@@ -60,5 +69,5 @@ export async function GET(request: Request) {
     if (n) incoherences[r.id] = n;
   }
   const erreur = Object.values(out).some((x) => x.status === "erreur");
-  return Response.json({ ...out, relu, banque, auto, incoherences }, { status: erreur ? 502 : 200 });
+  return Response.json({ ...out, relu, banque, auto, contre, incoherences }, { status: erreur ? 502 : 200 });
 }
