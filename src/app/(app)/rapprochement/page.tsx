@@ -63,7 +63,7 @@ export default function RapprochementPage() {
     const cashLines: CashLine[] = days.map((d) => ({ id: d.id, date: d.date, amount: d.cb }));
     const bankLines: BankLine[] = credits
       .filter((b) => !isCashDeposit(b.libelle) && !isUber(b.libelle))
-      .map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle }));
+      .map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle, ...(b.valeur ? { valeur: b.valeur } : {}) }));
     return reconcile(cashLines, bankLines, {
       maxDays: Number(maxDays) || 5,
       maxFeeRate: (Number(maxFee.replace(",", ".")) || 0) / 100,
@@ -75,7 +75,7 @@ export default function RapprochementPage() {
     const cashLines: CashLine[] = days.map((d) => ({ id: d.id, date: d.date, amount: d.especes }));
     const deposits: BankLine[] = credits
       .filter((b) => isCashDeposit(b.libelle))
-      .map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle }));
+      .map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle, ...(b.valeur ? { valeur: b.valeur } : {}) }));
     return reconcileDeposits(cashLines, deposits, { maxDays: 14, tolerance: 0 });
   }, [days, credits]);
 
@@ -85,7 +85,7 @@ export default function RapprochementPage() {
       .map((u) => ({ id: u.id, date: u.date, amount: u.montant }));
     const virements: BankLine[] = credits
       .filter((b) => isUber(b.libelle))
-      .map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle }));
+      .map((b) => ({ id: b.id, date: b.date, amount: b.montant, libelle: b.libelle, ...(b.valeur ? { valeur: b.valeur } : {}) }));
     // Montants nets des deux côtés : égalité au centime, virement entre J-2 et J+5.
     return reconcile(payouts, virements, { minDays: -2, maxDays: 5, maxFeeRate: 0, tolerance: 1 });
   }, [uber.items, credits, start, end]);

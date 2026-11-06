@@ -124,6 +124,8 @@ export interface BankTransaction {
   montant: number; // centimes, positif = crédit
   details?: string; // informations complémentaires de la banque (import de fichier)
   type?: string; // type d'opération donné par la banque (import de fichier)
+  /** Date de valeur (AAAA-MM-JJ) : une remise CB dont la valeur précède le crédit appartient au service de la veille. */
+  valeur?: string;
   importId: string; // "banque" pour le relevé automatique
   /** "banque" = relevé automatique DSP2 ; absent = import de fichier. */
   source?: "banque";

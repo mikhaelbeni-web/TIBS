@@ -11,6 +11,8 @@ export interface BankLine {
   date: string;
   amount: number; // centimes, crédit positif
   libelle: string;
+  /** Date de valeur donnée par la banque (AAAA-MM-JJ), si connue. */
+  valeur?: string;
 }
 
 export interface MatchOptions {

@@ -3,6 +3,8 @@
  * Fonctions pures : conversion des opérations de l'API en lignes bankTransactions, dédoublonnage, échéances.
  */
 
+import { REMISE_CB } from "./ticketZ";
+
 /** Opération telle que renvoyée par GET /accounts/{uid}/transactions (champs utiles). */
 export interface EbTransaction {
   entry_reference?: string | null;
@@ -25,6 +27,8 @@ export interface LigneBanque {
   montant: number; // centimes, positif = crédit
   /** Référence de l'opération chez la banque (sert d'identifiant stable). */
   ref: string;
+  /** Date de valeur (AAAA-MM-JJ). Une remise CB dont la valeur précède le crédit appartient au service de la veille. */
+  valeur?: string;
 }
 
 const ISO = /^\d{4}-\d{2}-\d{2}/;
@@ -56,7 +60,8 @@ export function versLigne(t: EbTransaction): Omit<LigneBanque, "ref"> & { ref?: 
     t.bank_transaction_code?.description?.trim() ||
     "Opération";
   const ref = t.entry_reference || t.transaction_id || undefined;
-  return { date, libelle, montant, ref: ref ?? undefined };
+  const valeur = t.value_date && ISO.test(t.value_date) ? t.value_date.slice(0, 10) : undefined;
+  return { date, libelle, montant, ref: ref ?? undefined, ...(valeur ? { valeur } : {}) };
 }
 
 /** Empreinte courte et stable (deux hachages 32 bits FNV-1a et djb2, en base 36), pour fabriquer des identifiants de document. */
@@ -90,6 +95,45 @@ export function lignesDuCompte(compte: string, txs: EbTransaction[]): (LigneBanq
     out.push({ ...l, ref, id: `eb_${l.date}_${empreinte(`${compte}|${ref}`)}` });
   }
   return out;
+}
+
+/**
+ * Associe chaque opération importée d'un fichier à l'opération de l'API correspondante (même montant, date à 3 jours
+ * près, la plus proche ; chaque opération ne sert qu'une fois). Sert à compléter la date de valeur des anciens imports.
+ */
+export function apparierImports<
+  T extends { date: string; montant: number; libelle?: string },
+  I extends { id: string; date: string; montant: number; libelle?: string },
+>(lignes: T[], importees: I[], toleranceJours = 3): Map<string, T> {
+  const jour = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
+  // Deux remises de même montant à 3 jours d'écart : la date du libellé (« CB TIB S 301026 ») départage.
+  const code = (s?: string) => s?.match(/\b\d{6}\b/)?.[0];
+  const distance = (l: T, i: I) => Math.abs(jour(l.date) - jour(i.date)) + (code(l.libelle) === code(i.libelle) ? 0 : 0.5);
+  const libres = new Set(lignes.keys());
+  const out = new Map<string, T>();
+  for (const i of importees) {
+    let best = -1;
+    for (const k of libres) {
+      const l = lignes[k];
+      if (l.montant !== i.montant || Math.abs(jour(l.date) - jour(i.date)) > toleranceJours) continue;
+      if (best < 0 || distance(l, i) < distance(lignes[best], i)) best = k;
+    }
+    if (best < 0) continue;
+    libres.delete(best);
+    out.set(i.id, lignes[best]);
+  }
+  return out;
+}
+
+/** Remises CB du relevé : combien ont une date de valeur, et combien la portent avant ou après le jour de crédit. */
+export function compterValeurs(lignes: { date: string; montant: number; libelle: string; valeur?: string }[]) {
+  const remises = lignes.filter((l) => l.montant > 0 && REMISE_CB.test(l.libelle));
+  return {
+    remises: remises.length,
+    avecValeur: remises.filter((l) => l.valeur).length,
+    valeurAvant: remises.filter((l) => l.valeur && l.valeur < l.date).length,
+    valeurApres: remises.filter((l) => l.valeur && l.valeur > l.date).length,
+  };
 }
 
 /**

@@ -100,16 +100,18 @@ export interface ComparaisonCB {
    * des paiements de la journée précédente.
    */
   remiseExacte?: { sens: "manquant" | "excedent"; remise: BankLine };
+  /** Petit manque en banque, toujours dans ce sens : CB saisie en caisse qui n'est pas passée en remise CB. */
+  sansRemise?: boolean;
   /** Écart cumulé du mois, remises par jour de crédit contre CB des journées couvertes. */
   cumul?: { depuis: string; caisse: number; banque: number; ecart: number };
   /** Crédits bancaires des jours suivants, pour vérifier à l'œil quand rien n'est rapproché. */
   candidats: BankLine[];
 }
 
-const REMISE = /\bCB\b(?!\s*COM)\D*?\d{6}\b/i;
+/** Libellé d'une remise CB d'un TPE (« CB TIB S 021126 CONTRAT 806056 »), hors frais « CB COM ». */
+export const REMISE_CB = /\bCB\b(?!\s*COM)\D*?\d{6}\b/i;
 
-/** Remise CB d'un TPE (« CB TIB S 021126 CONTRAT 806056 »), hors frais « CB COM ». */
-export const estRemiseCB = (b: BankLine) => b.amount > 0 && REMISE.test(b.libelle);
+export const estRemiseCB = (b: BankLine) => b.amount > 0 && REMISE_CB.test(b.libelle);
 
 interface GroupeCB {
   /** Jour où la banque crédite les remises. */
@@ -121,23 +123,34 @@ interface GroupeCB {
 }
 
 /**
+ * Jour de crédit qui compte pour une remise. Une remise dont la date de valeur précède le jour où elle
+ * est créditée est une télécollecte du matin : elle porte les ventes de la veille au soir et appartient
+ * au même service que les remises créditées à sa date de valeur. Vérifié sur octobre 2026 (Caisse
+ * d'Épargne) : 15 remises sur 283, toutes d'un même TPE ; avec cette règle, aucune journée ne montre
+ * plus de CB en banque qu'en caisse, et 9 groupes sur 26 tombent au centime (1 sans la règle).
+ */
+export const creditEffectif = (b: BankLine) => (b.valeur && b.valeur < b.date ? b.valeur : b.date);
+
+/**
  * Les paiements CB d'une journée de service sont crédités le premier jour bancaire qui suit
  * (le TPE les envoie la nuit ; samedi soir et dimanche arrivent le lundi). La date écrite dans le
  * libellé (« 021126 ») est celle de l'envoi : une remise « 021126 » peut contenir le dimanche 01/11.
  * Vérifié sur octobre 2026 : par jour de crédit, écart de 0 à 270 € ; par date de libellé, jusqu'à 4 000 €.
  */
 function groupesCB(joursCaisse: CashLine[], remises: BankLine[], maxDays: number): GroupeCB[] {
-  const credits = [...new Set(remises.map((b) => b.date))].sort();
+  const credits = [...new Set(remises.map(creditEffectif))].sort();
   return credits.map((credit, i) => {
     const plancher = addDays(credit, -maxDays);
     const debut = i > 0 && credits[i - 1] > plancher ? credits[i - 1] : plancher;
-    const rs = remises.filter((b) => b.date === credit);
+    const rs = remises.filter((b) => creditEffectif(b) === credit);
     const jours = joursCaisse.filter((c) => c.amount > 0 && c.date >= debut && c.date < credit).sort((a, b) => a.date.localeCompare(b.date));
     return { credit, remises: rs, banque: rs.reduce((t, b) => t + b.amount, 0), jours, caisse: jours.reduce((t, c) => t + c.amount, 0) };
   });
 }
 
 const TOLERANCE_CB = 100; // centimes
+/** Au-delà, un manque en banque n'est plus un simple titre-restaurant saisi en CB. */
+const PLAFOND_SANS_REMISE = 15000;
 
 function parCredit(
   jour: string,
@@ -165,16 +178,20 @@ function parCredit(
     }
   }
   if (statut === "ecart") {
-    // Vu sur octobre 2026 : 153,70 €, 162,05 €, 82,30 € manquants retrouvés au centime dans le crédit suivant.
+    // Sans date de valeur (capture, ancien import) : un lot du matin se reconnaît à son montant, égal à l'écart.
     const r =
       ecart < 0
-        ? groupes[i + 1]?.remises.find((b) => b.amount === -ecart)
-        : g.remises.find((b) => b.amount === ecart);
+        ? groupes[i + 1]?.remises.find((b) => b.amount === -ecart && !b.valeur)
+        : g.remises.find((b) => b.amount === ecart && !b.valeur);
     if (r) {
       statut = "proche";
       remiseExacte = { sens: ecart < 0 ? "manquant" : "excedent", remise: r };
     }
   }
+  // Il manque un peu de CB en banque : paiement saisi « CB » en caisse sans remise CB (titre-restaurant carte passé
+  // sur le TPE, payé à part par Edenred, Up, Swile ou Pluxee ; ou paiement refusé au TPE). Octobre 2026 : -13,50 à -118,20 €.
+  const sansRemise = statut === "ecart" && ecart < 0 && -ecart <= PLAFOND_SANS_REMISE;
+  if (sansRemise) statut = "proche";
   // Cumul : depuis le premier crédit des journées du mois (ou ce crédit, s'il chevauche deux mois).
   const debutMois = `${jour.slice(0, 7)}-01`;
   const premier = groupes.findIndex((x) => x.jours.length > 0 && x.jours[0].date >= debutMois);
@@ -195,6 +212,7 @@ function parCredit(
     joursCouverts: g.jours,
     ...(voisin ? { voisin } : {}),
     ...(remiseExacte ? { remiseExacte } : {}),
+    ...(sansRemise ? { sansRemise } : {}),
     ...(cumul ? { cumul } : {}),
   };
 }

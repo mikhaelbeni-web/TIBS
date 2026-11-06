@@ -129,6 +129,8 @@ export interface BankDraft {
   details?: string;
   /** Type d'opération donné par la banque (Remise CB, Prélèvement SDD, Virement, Dépôt espèces…). */
   type?: string;
+  /** Date de valeur (AAAA-MM-JJ), si le fichier la donne à côté de la date d'opération. */
+  valeur?: string;
 }
 
 /** Accepte une colonne Montant signée, ou deux colonnes Débit / Crédit. Les lignes illisibles sont ignorées. */
@@ -145,5 +147,6 @@ export function rowToBank(row: Row): BankDraft | null {
     if (credit === 0 && debit === 0) montant = null;
   }
   if (!date || montant === null) return null;
-  return { date, libelle, montant, ...(details ? { details } : {}), ...(type ? { type } : {}) };
+  const valeur = toIsoDate(pick(row, ["date de valeur", "date valeur"]));
+  return { date, libelle, montant, ...(details ? { details } : {}), ...(type ? { type } : {}), ...(valeur ? { valeur } : {}) };
 }

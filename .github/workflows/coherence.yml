@@ -1,17 +1,28 @@
-# Rattrapage de mois passés dans L'Addition (lancé à la main) : journées de l'export (CB, espèces, Uber…)
-# rangées dans l'app, sans lire les tickets Z. Le journal n'affiche que des compteurs.
-name: Rattrapage L'Addition (manuel)
+# Lancé à la main. Deux actions sur des mois passés :
+# - rattrapage : journées de l'export L'Addition (CB, espèces, Uber…) rangées dans l'app, sans lire les tickets Z ;
+# - controle : chaque journée CB du Z rapprochée des remises CB de la banque, avec et sans date de valeur.
+# Le journal est public : il n'affiche que des compteurs, jamais un montant ni un libellé.
+name: Rattrapage et contrôle CB (manuel)
 
 on:
   workflow_dispatch:
     inputs:
       mois:
-        description: "Mois à relever, ex. 2026-08,2026-09"
+        description: "Mois, ex. 2026-08,2026-09"
         required: true
         default: ""
+      action:
+        description: "rattrapage (L'Addition) ou controle (CB caisse ↔ banque)"
+        required: true
+        default: controle
+        type: choice
+        options:
+          - controle
+          - rattrapage
 
 jobs:
   rattrapage:
+    if: inputs.action == 'rattrapage'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -26,3 +37,18 @@ jobs:
             curl -sS --max-time 320 -H "Authorization: Bearer $CRON_SECRET" "https://tibs.vercel.app/api/cron/laddition?force=1&sansZ=1&mois=$m"
             echo
           done
+
+  controle:
+    if: inputs.action == 'controle'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Rapprocher CB caisse et remises CB (compteurs)
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MOIS: ${{ inputs.mois }}
+        run: |
+          if ! [[ "$MOIS" =~ ^[0-9]{4}-[0-9]{2}(,[0-9]{4}-[0-9]{2})*$ ]]; then echo "mois attendus : AAAA-MM[,AAAA-MM]"; exit 1; fi
+          code=$(curl -sS -o out.json -w "%{http_code}" --max-time 120 -H "Authorization: Bearer $CRON_SECRET" "https://tibs.vercel.app/api/cron/controle-cb?mois=$MOIS")
+          cat out.json; echo
+          test "$code" = "200"
