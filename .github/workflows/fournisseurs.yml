@@ -7,19 +7,24 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "mesure"
+        description: "mesure (compteurs + détail chiffré) ou nettoyer (supprime la branche des détails chiffrés)"
         required: true
         default: mesure
         type: choice
         options:
           - mesure
+          - nettoyer
       cle:
         description: "Clé publique RSA (SPKI DER, base64) pour chiffrer le détail. Vide = compteurs seulement."
         required: false
         default: ""
 
+permissions:
+  contents: write
+
 jobs:
   fournisseurs:
+    if: inputs.action != 'nettoyer'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -32,5 +37,22 @@ jobs:
           if [ -n "$CLE" ] && ! [[ "$CLE" =~ ^[A-Za-z0-9+/=]+$ ]]; then echo "clé invalide"; exit 1; fi
           code=$(curl -sS -o out.json -w "%{http_code}" --max-time 320 -G -H "Authorization: Bearer $CRON_SECRET" \
             --data-urlencode "action=$ACTION" --data-urlencode "cle=$CLE" https://tibs.vercel.app/api/cron/fournisseurs)
-          echo "HTTP $code"; cat out.json; echo
+          echo "HTTP $code"
+          # Compteurs en clair ; le détail chiffré n'est pas affiché mais déposé sur la branche « mesures-chiffrees ».
+          jq -c 'del(.chiffre)' out.json || cat out.json
           test "$code" = "200"
+          if jq -e '.chiffre' out.json > /dev/null; then
+            jq -r '.chiffre' out.json > /tmp/detail.b64
+            cd "$(mktemp -d)" && git init -q && git checkout -q -b mesures-chiffrees
+            cp /tmp/detail.b64 "detail-$GITHUB_RUN_ID.b64"
+            git add . && git -c user.name=tibs-bot -c user.email=bot@users.noreply.github.com commit -qm "détail chiffré $GITHUB_RUN_ID"
+            git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" mesures-chiffrees
+            echo "détail chiffré déposé : branche mesures-chiffrees, fichier detail-$GITHUB_RUN_ID.b64"
+          fi
+
+  nettoyer:
+    if: inputs.action == 'nettoyer'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Supprimer la branche des détails chiffrés
+        run: git push -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" --delete mesures-chiffrees || true
