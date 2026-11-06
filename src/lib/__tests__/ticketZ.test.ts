@@ -354,6 +354,28 @@ describe("remises CB : lot du matin retrouvé sans date de valeur", () => {
 });
 
 describe("contrôle d'un mois en compteurs", () => {
+  it("manque CB comparé aux virements titres-restaurant (paiement à la semaine)", () => {
+    // Chaque journée : 2 % de la CB de caisse passés en carte titre-restaurant, payés par virement 7 jours plus tard.
+    const caisse = journees([
+      ["2026-10-05", 100000],
+      ["2026-10-06", 50000],
+      ["2026-10-07", 80000],
+    ]);
+    const lignes = [
+      ...remisesCB([
+        ["2026-10-06", "051026", [98000]],
+        ["2026-10-07", "061026", [49000]],
+        ["2026-10-08", "071026", [78400]],
+      ]),
+      { id: "tr", date: "2026-10-14", amount: 4600, libelle: "VIR SEPA CONECS TRD-123" },
+      { id: "uber", date: "2026-10-12", amount: 30000, libelle: "VIR UBER EATS" },
+      { id: "x", date: "2026-10-12", amount: 1000, libelle: "VIR SEPA DIVERS" },
+    ];
+    const b = bilanCB("2026-10", caisse, lignes, "2026-10-20");
+    expect(b.diagnostic.familles).toEqual({ cb: 3, uber: 1, especes: 0, tr: 1, amex: 0, stripe: 0, autre: 1 });
+    expect(b.diagnostic.manque).toEqual({ tr: 1, trDecale: 1, amex: 0, amexDecale: 0 });
+    expect(b.diagnostic.creditsSansCaisse).toEqual([]);
+  });
   it("compte les groupes exacts, en plus et en moins, avec et sans date de valeur", () => {
     const lignes = [
       ...remisesCB([
