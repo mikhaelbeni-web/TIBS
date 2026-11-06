@@ -100,8 +100,11 @@ export interface ComparaisonCB {
    * des paiements de la journée précédente.
    */
   remiseExacte?: { sens: "manquant" | "excedent"; remise: BankLine };
-  /** Petit manque en banque, toujours dans ce sens : CB saisie en caisse qui n'est pas passée en remise CB. */
-  sansRemise?: boolean;
+  /**
+   * Petit manque en banque (centimes) : cartes titre-restaurant passées « CB » en caisse (confirmé par le gérant le
+   * 06/11/2026). Elles ne sont pas dans les remises CB : les émetteurs les paient à part, contrôle au mois.
+   */
+  titres?: number;
   /** Écart cumulé du mois, remises par jour de crédit contre CB des journées couvertes. */
   cumul?: { depuis: string; caisse: number; banque: number; ecart: number };
   /** Crédits bancaires des jours suivants, pour vérifier à l'œil quand rien n'est rapproché. */
@@ -246,8 +249,12 @@ function groupesCB(joursCaisse: CashLine[], remises: BankLine[], maxDays: number
 }
 
 const TOLERANCE_CB = 100; // centimes
-/** Au-delà, un manque en banque n'est plus un simple titre-restaurant saisi en CB. */
-const PLAFOND_SANS_REMISE = 15000;
+/** Au-delà, un manque en banque n'est plus un simple titre-restaurant saisi en CB (octobre 2026 : 13 à 118 € par jour). */
+const PLAFOND_TITRES = 20000;
+
+/** Virement d'un émetteur de titres-restaurant (cartes passées au TPE, payées à part). */
+export const estVirementTitres = (libelle: string) =>
+  /\b(TRD|CONECS|EDENRED|SWILE|BIMPLI|PLUXEE|SODEXO|APETIZ|UP\s*DEJ|CHEQUE\s*DEJ|TICKET\s*REST|TITRES?\s*REST)/i.test(libelle);
 
 function parCredit(
   jour: string,
@@ -285,10 +292,11 @@ function parCredit(
       remiseExacte = { sens: ecart < 0 ? "manquant" : "excedent", remise: r };
     }
   }
-  // Il manque un peu de CB en banque : paiement saisi « CB » en caisse sans remise CB (paiement refusé ou annulé au TPE,
-  // autre mode saisi en CB, carte titre-restaurant payée à part par l'émetteur). Vu sur octobre 2026 : toujours dans ce sens.
-  const sansRemise = statut === "ecart" && ecart < 0 && -ecart <= PLAFOND_SANS_REMISE;
-  if (sansRemise) statut = "proche";
+  // Il manque un peu de CB en banque : cartes titre-restaurant saisies « CB » en caisse, payées à part par les émetteurs
+  // (confirmé par le gérant). Août-octobre 2026 : 15 virements d'émetteurs par mois, aucun titre-restaurant sur les tickets Z,
+  // manque deux fois plus faible le week-end. Contrôlé au mois contre les virements (onglet CB).
+  const titres = statut === "ecart" && ecart < 0 && -ecart <= PLAFOND_TITRES ? -ecart : undefined;
+  if (titres) statut = "ok";
   // Cumul : depuis le premier crédit des journées du mois (ou ce crédit, s'il chevauche deux mois).
   const debutMois = `${jour.slice(0, 7)}-01`;
   const premier = groupes.findIndex((x) => x.jours.length > 0 && x.jours[0].date >= debutMois);
@@ -309,7 +317,7 @@ function parCredit(
     joursCouverts: g.jours,
     ...(voisin ? { voisin } : {}),
     ...(remiseExacte ? { remiseExacte } : {}),
-    ...(sansRemise ? { sansRemise } : {}),
+    ...(titres ? { titres } : {}),
     ...(cumul ? { cumul } : {}),
   };
 }
@@ -421,6 +429,47 @@ export function pointageMoisCB(
     groupes: [...groupes.values()].sort((a, b) => (a.banque?.date ?? "").localeCompare(b.banque?.date ?? "")),
     sansRemise,
     remisesSeules: lignes.filter((b) => estRemiseCB(b) && b.date.startsWith(mois) && !utilisees.has(b.id)).sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
+export interface SuiviTitres {
+  /** Tickets-resto passés en CB (manque CB des crédits du mois) et virements des émetteurs reçus dans le mois. */
+  mois: { passes: number; recus: number; virements: BankLine[] };
+  /** Depuis le début du relevé bancaire jusqu'à la fin du mois : les émetteurs paient avec retard, seul le cumul se compare. */
+  cumul: { depuis: string; passes: number; recus: number };
+}
+
+/**
+ * Tickets-resto saisis « CB » en caisse : absents des remises CB, payés à part et en retard par les émetteurs. Chaque
+ * crédit CB compte son petit manque (titres) ; on le compare, en cumul, aux virements des émetteurs.
+ */
+export function suiviTitres(
+  mois: string,
+  joursCaisse: CashLine[],
+  credits: BankLine[],
+  options: { maxDays?: number; maxFeeRate?: number; today?: string; lignes?: BankLine[] } = {},
+): SuiviTitres {
+  const lignes = options.lignes ?? credits;
+  const depuis = lignes.reduce((m, b) => (b.date < m ? b.date : m), "9999-12-31");
+  const fin = `${mois}-31`;
+  const parCredit = new Map<string, number>();
+  // Les journées juste avant le relevé comptent aussi : leurs remises sont créditées dedans.
+  const avant = new Date(Date.parse(`${depuis}T00:00:00Z`) - 10 * 86400000).toISOString().slice(0, 10);
+  for (const c of joursCaisse) {
+    if (c.amount <= 0 || c.date < avant || c.date > fin) continue;
+    const r = comparerCB(c.date, joursCaisse, credits, { ...options, lignes });
+    if (r.remises && r.banque && r.banque.date >= depuis && !parCredit.has(r.banque.date)) parCredit.set(r.banque.date, r.titres ?? 0);
+  }
+  const virements = lignes.filter((b) => b.amount > 0 && estVirementTitres(b.libelle) && b.date <= fin).sort((a, b) => a.date.localeCompare(b.date));
+  const somme = (l: number[]) => l.reduce((t, x) => t + x, 0);
+  const duMois = virements.filter((b) => b.date.startsWith(mois));
+  return {
+    mois: {
+      passes: somme([...parCredit].filter(([d]) => d.startsWith(mois)).map(([, t]) => t)),
+      recus: somme(duMois.map((b) => b.amount)),
+      virements: duMois,
+    },
+    cumul: { depuis, passes: somme([...parCredit].filter(([d]) => d <= fin).map(([, t]) => t)), recus: somme(virements.map((b) => b.amount)) },
   };
 }
 

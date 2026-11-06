@@ -318,7 +318,7 @@ export function JourAJour({
                       </div>
                     ))}
                     {cb.remises.length > 1 && <Ligne label="Total des remises">{formatEuros(cb.banque.montant)}</Ligne>}
-                    <Ligne label="Écart">{formatEuros(cb.ecart ?? 0)}</Ligne>
+                    <Ligne label={cb.titres ? "Tickets-resto passés en CB" : "Écart"}>{formatEuros(cb.ecart ?? 0)}</Ligne>
                     {cb.voisin && (
                       <p className="text-xs text-muted">
                         Compensé par le crédit du {fr(cb.voisin.credit)} ({formatEuros(cb.voisin.ecart)}) : un paiement est passé sur le jour voisin.
@@ -331,11 +331,10 @@ export function JourAJour({
                           : `La remise de ${formatEuros(cb.remiseExacte.remise.amount)} (${cb.remiseExacte.remise.libelle.slice(0, 34)}) a exactement le montant de l'excédent : elle contient sans doute des paiements de la journée précédente, envoyés en retard.`}
                       </p>
                     )}
-                    {cb.sansRemise && (
+                    {cb.titres && (
                       <p className="text-xs text-muted">
-                        Il manque {formatEuros(-(cb.ecart ?? 0))} en remise CB : un paiement saisi « CB » en caisse n&apos;est pas passé en remise CB. Causes
-                        possibles : paiement refusé ou annulé au TPE après validation en caisse, autre mode de paiement saisi en CB, carte titre-restaurant passée
-                        sur le TPE (payée à part par l&apos;émetteur).
+                        {formatEuros(cb.titres)} de tickets-resto passés en « CB » à la caisse : ils ne sont pas dans les remises CB, l&apos;émetteur (Edenred, Up,
+                        Pluxee, Bimpli…) les paie à part, avec plusieurs jours de retard. Le cumul est comparé à ses virements dans l&apos;onglet CB.
                       </p>
                     )}
                     {cb.cumul && <Ligne label={`Écart cumulé depuis le ${fr(cb.cumul.depuis)}`}>{formatEuros(cb.cumul.ecart)}</Ligne>}

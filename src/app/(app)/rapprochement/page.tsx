@@ -14,7 +14,7 @@ import { readSpreadsheet, rowToBank } from "@/lib/importer";
 import { apparierImports, sansDoublonsImport } from "@/lib/banque";
 import { formatEuros, toCents } from "@/lib/money";
 import { reconcile, reconcileDeposits, type BankLine, type CashLine } from "@/lib/reconcile";
-import { pointageMoisCB, type Statut } from "@/lib/ticketZ";
+import { pointageMoisCB, suiviTitres, type Statut } from "@/lib/ticketZ";
 import type { BankTransaction, CashEntry, UberJourDoc, UberPayout, WithId } from "@/lib/types";
 import { useCollection } from "@/lib/useCollection";
 
@@ -70,6 +70,16 @@ export default function RapprochementPage() {
   const cb = useMemo(
     () =>
       pointageMoisCB(
+        mois,
+        cbCaisse,
+        toutesLignes.filter((b) => b.amount > 0 && !isCashDeposit(b.libelle) && !isUber(b.libelle)),
+        { maxDays: Number(maxDays) || 5, maxFeeRate: (Number(maxFee.replace(",", ".")) || 0) / 100, lignes: toutesLignes },
+      ),
+    [mois, cbCaisse, toutesLignes, maxDays, maxFee],
+  );
+  const titres = useMemo(
+    () =>
+      suiviTitres(
         mois,
         cbCaisse,
         toutesLignes.filter((b) => b.amount > 0 && !isCashDeposit(b.libelle) && !isUber(b.libelle)),
@@ -396,15 +406,54 @@ export default function RapprochementPage() {
                           {g.remises?.some((b) => b.valeur && b.valeur < b.date) ? " (dont lots du matin)" : ""}
                         </div>
                       </div>
-                      <Badge tone={TONS_CB[g.statut]}>{Math.abs(ecart) <= 100 ? "OK" : formatEuros(ecart)}</Badge>
+                      <Badge tone={TONS_CB[g.statut]}>{Math.abs(ecart) <= 100 ? "OK" : g.titres ? `TR ${formatEuros(g.titres)}` : formatEuros(ecart)}</Badge>
                     </div>
                     {g.voisin && <p className="text-xs text-muted">Compensé par le crédit du {fr(g.voisin.credit)} ({formatEuros(g.voisin.ecart)}).</p>}
-                    {g.sansRemise && <p className="text-xs text-muted">Petit manque en remise CB : paiement saisi « CB » en caisse et non passé au TPE, à vérifier.</p>}
+                    {g.titres && <p className="text-xs text-muted">Tickets-resto passés en CB : payés à part par l&apos;émetteur, suivis ci-dessous.</p>}
                   </Card>
                 </li>
               );
             })}
           </ul>
+          <Card className="space-y-1">
+            <div className="flex items-start justify-between gap-3">
+              <div className="font-medium">Tickets-resto passés en CB</div>
+              <Badge tone={titres.cumul.recus >= titres.cumul.passes * 0.95 ? "green" : "orange"}>
+                {titres.cumul.recus >= titres.cumul.passes * 0.95 ? "Payés" : `À recevoir ${formatEuros(titres.cumul.passes - titres.cumul.recus)}`}
+              </Badge>
+            </div>
+            <div className="flex justify-between gap-2 text-sm"><span>Passés en CB ce mois</span><span className="tabular-nums">{formatEuros(titres.mois.passes)}</span></div>
+            <div className="flex justify-between gap-2 text-sm">
+              <span>Virements des émetteurs ce mois ({titres.mois.virements.length})</span>
+              <span className="tabular-nums">{formatEuros(titres.mois.recus)}</span>
+            </div>
+            <div className="flex justify-between gap-2 text-sm text-muted">
+              <span>Passés en CB depuis le {fr(titres.cumul.depuis)}</span>
+              <span className="tabular-nums">{formatEuros(titres.cumul.passes)}</span>
+            </div>
+            <div className="flex justify-between gap-2 text-sm text-muted">
+              <span>Reçus depuis le {fr(titres.cumul.depuis)}</span>
+              <span className="tabular-nums">{formatEuros(titres.cumul.recus)}</span>
+            </div>
+            <p className="text-xs text-muted">
+              À la caisse, les cartes tickets-resto sont saisies « CB ». Elles ne sont pas dans les remises CB : chaque émetteur (Edenred, Up, Pluxee,
+              Bimpli…) les paie par virement, avec plusieurs jours ou semaines de retard, d&apos;où la comparaison en cumul. Ses virements comprennent aussi les
+              tickets-resto des commandes Uber Eats.
+            </p>
+            {titres.mois.virements.length > 0 && (
+              <details className="text-sm">
+                <summary className="cursor-pointer text-muted">Virements du mois</summary>
+                <ul className="mt-1 space-y-1">
+                  {titres.mois.virements.map((b) => (
+                    <li key={b.id} className="flex justify-between gap-2">
+                      <span className="truncate">{fr(b.date)} · {b.libelle}</span>
+                      <span className="shrink-0 tabular-nums">{formatEuros(b.amount)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </Card>
           {cb.sansRemise.length > 0 && (
             <Card className="border-danger/30">
               <div className="mb-2 font-medium text-danger">Jours de caisse sans remise CB trouvée</div>

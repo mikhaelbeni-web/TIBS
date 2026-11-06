@@ -13,6 +13,7 @@ import {
   jourDuTicket,
   pointageMoisCB,
   semaineUber,
+  suiviTitres,
   totaux,
 } from "../ticketZ";
 
@@ -171,8 +172,8 @@ describe("remises CB Caisse d'Épargne", () => {
   });
   it("une journée = remises créditées le jour bancaire suivant, quelle que soit la date du libellé", () => {
     expect(cb("2026-10-16")).toMatchObject({ statut: "ok", caisse: 30000, ecart: 0, banque: { date: "2026-10-17", montant: 30000, jours: 1 } });
-    // Petit manque en banque : CB saisie en caisse sans remise CB, à vérifier mais pas une alerte.
-    expect(cb("2026-10-15")).toMatchObject({ statut: "proche", sansRemise: true, banque: { date: "2026-10-16", montant: 97575 }, ecart: -2425 });
+    // Petit manque en banque : tickets-resto saisis « CB » en caisse, payés à part par l'émetteur.
+    expect(cb("2026-10-15")).toMatchObject({ statut: "ok", titres: 2425, banque: { date: "2026-10-16", montant: 97575 }, ecart: -2425 });
   });
   it("samedi soir et dimanche sont crédités ensemble le lundi", () => {
     const r = cb("2026-10-18");
@@ -252,7 +253,7 @@ describe("remises CB : lot envoyé en retard, cumul à cheval sur deux mois", ()
     expect(cb("2026-11-02")).toMatchObject({ statut: "proche", ecart: 25000, remiseExacte: { sens: "excedent", remise: { amount: 25000 } } });
   });
   it("excédent sans remise correspondante reste un écart, petit manque signalé ; cumul depuis le 02/11", () => {
-    expect(cb("2026-11-03")).toMatchObject({ statut: "proche", ecart: -5000, sansRemise: true });
+    expect(cb("2026-11-03")).toMatchObject({ statut: "ok", ecart: -5000, titres: 5000 });
     expect(cb("2026-11-04")).toMatchObject({ statut: "ecart", ecart: 3333, cumul: { depuis: "2026-11-02", caisse: 480000, banque: 503333, ecart: 23333 } });
   });
   it("montant manquant retrouvé au centime dans le crédit suivant", () => {
@@ -294,11 +295,12 @@ describe("remises CB : date de valeur", () => {
     const r = comparerCB("2026-10-23", journees([["2026-10-23", 27750]]), ven, { today: "2026-11-06" });
     expect(r).toMatchObject({ statut: "ok", banque: { date: "2026-10-24" } });
   });
-  it("seul un petit manque est mis sur le compte d'un paiement sans remise ; un excédent reste un écart", () => {
+  it("seul un petit manque (200 € au plus) est mis sur le compte des tickets-resto ; un excédent reste un écart", () => {
     const une = (montant: number) =>
       comparerCB("2026-10-27", journees([["2026-10-27", 400000]]), remisesCB([["2026-10-28", "271026", [montant]]]), { today: "2026-11-06" });
-    expect(une(400000 - 7350)).toMatchObject({ statut: "proche", sansRemise: true });
-    expect(une(400000 - 20000)).toMatchObject({ statut: "ecart" });
+    expect(une(400000 - 7350)).toMatchObject({ statut: "ok", titres: 7350 });
+    expect(une(400000 - 20000)).toMatchObject({ statut: "ok", titres: 20000 });
+    expect(une(400000 - 25000)).toMatchObject({ statut: "ecart" });
     expect(une(400000 + 7350).statut).toBe("ecart");
   });
 });
@@ -353,6 +355,34 @@ describe("remises CB : lot du matin retrouvé sans date de valeur", () => {
   });
 });
 
+describe("tickets-resto passés en CB, payés à part par les émetteurs", () => {
+  // Chaque journée : 2 % de la CB de caisse en cartes tickets-resto, absentes des remises CB.
+  const caisse = journees([
+    ["2026-10-05", 100000],
+    ["2026-10-06", 50000],
+    ["2026-10-07", 80000],
+  ]);
+  const remises = remisesCB([
+    ["2026-10-06", "051026", [98000]],
+    ["2026-10-07", "061026", [49000]],
+    ["2026-10-08", "071026", [78400]],
+  ]);
+  const suivi = (mois: string, virement: string) => {
+    const lignes = [...remises, { id: "tr", date: virement, amount: 4600, libelle: "VIR SEPA EDENRED FRANCE" }];
+    return suiviTitres(mois, caisse, lignes.filter((b) => !/EDENRED/.test(b.libelle)), { lignes, today: "2026-11-20" });
+  };
+  it("chaque crédit compte son petit manque ; le virement groupé de l'émetteur le couvre", () => {
+    expect(suivi("2026-10", "2026-10-14")).toMatchObject({
+      mois: { passes: 4600, recus: 4600, virements: [{ id: "tr" }] },
+      cumul: { depuis: "2026-10-06", passes: 4600, recus: 4600 },
+    });
+  });
+  it("virement arrivé le mois suivant : à recevoir en fin de mois, couvert en cumul ensuite", () => {
+    expect(suivi("2026-10", "2026-11-03")).toMatchObject({ mois: { passes: 4600, recus: 0 }, cumul: { passes: 4600, recus: 0 } });
+    expect(suivi("2026-11", "2026-11-03")).toMatchObject({ mois: { passes: 0, recus: 4600 }, cumul: { passes: 4600, recus: 4600 } });
+  });
+});
+
 describe("contrôle d'un mois en compteurs", () => {
   it("manque CB comparé aux virements titres-restaurant (paiement à la semaine)", () => {
     // Chaque journée : 2 % de la CB de caisse passés en carte titre-restaurant, payés par virement 7 jours plus tard.
@@ -400,8 +430,9 @@ describe("contrôle d'un mois en compteurs", () => {
     ]);
     const b = bilanCB("2026-10", caisse, lignes, "2026-10-23");
     expect(b.jours).toBe(4);
-    expect(b.avecValeur).toEqual({ groupes: 3, exacts: 2, negatifs: 1, positifs: 0, sansCredit: 1 });
-    expect(b.sansValeur).toEqual({ groupes: 3, exacts: 0, negatifs: 2, positifs: 1, sansCredit: 1 });
+    // Le manque de 10 € du 22 = tickets-resto. Sans date de valeur, le -50 € du 20 se compense avec le +50 € du 21 (voisin).
+    expect(b.avecValeur).toEqual({ groupes: 3, exacts: 2, titres: 1, negatifs: 0, positifs: 0, sansCredit: 1 });
+    expect(b.sansValeur).toEqual({ groupes: 3, exacts: 0, titres: 1, negatifs: 1, positifs: 1, sansCredit: 1 });
     // Sans n° de remise dans le libellé, rien n'est déduit.
     expect(b.deduite).toEqual(b.sansValeur);
     expect(b.lots).toEqual({ possibles: 0, deduits: 0 });
