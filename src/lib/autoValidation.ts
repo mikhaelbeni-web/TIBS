@@ -30,7 +30,7 @@ export type Doute =
 export const DOUTE_TEXTE: Record<Doute, string> = {
   incomplete: "Lecture incomplète : il manque le fournisseur, la date ou le montant.",
   lecture: "PDF pas encore lu par l'IA (limite, budget ou erreur) : il sera relu au prochain passage, ou touche « Lire ce PDF avec l'IA ».",
-  fournisseur_inconnu: "Le fournisseur lu sur le PDF n'apparaît pas dans le mail (mail transféré ou expéditeur inconnu).",
+  fournisseur_inconnu: "Le fournisseur lu sur le PDF n'apparaît nulle part dans le mail (expéditeur inconnu).",
   sans_numero: "Numéro de facture absent.",
   sans_date: "Date de facture absente.",
   date_future: "Date de facture dans le futur.",

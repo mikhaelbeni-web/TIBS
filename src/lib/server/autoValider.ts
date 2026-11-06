@@ -97,7 +97,9 @@ export async function validerAutomatiquement(rid: RestaurantId, { sauf = [] }: {
     const fiches = suppliers.filter((s) => low(s.nom) === nom);
     // Connu = l'expéditeur désigne ce fournisseur-là (règles, fiche), ou bien le mail porte le nom lu sur le PDF ;
     // jamais un mail transféré depuis une boîte du restaurant, et une seule fiche à ce nom.
-    const parLeMail = reconnu === null && !boites.includes(email) && nomDansLeMail(item.fournisseur, item.source ?? {});
+    // Mail transféré depuis une boîte du restaurant : c'est le gérant qui l'a envoyé, on le prend comme fourni.
+    const transfere = boites.includes(email);
+    const parLeMail = reconnu === null && (transfere || nomDansLeMail(item.fournisseur, item.source ?? {}));
     const connu = ((reconnu !== null && low(reconnu) === nom) || parLeMail) && fiches.length <= 1;
     const fiche = fiches[0];
     const numero = normNumero(item.numero ?? "");
