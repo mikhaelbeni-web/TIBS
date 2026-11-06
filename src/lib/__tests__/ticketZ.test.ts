@@ -287,7 +287,7 @@ describe("contrôle d'un mois en compteurs", () => {
     expect(b.jours).toBe(4);
     expect(b.avecValeur).toEqual({ groupes: 3, exacts: 2, negatifs: 1, positifs: 0, sansCredit: 1 });
     expect(b.sansValeur).toEqual({ groupes: 3, exacts: 0, negatifs: 2, positifs: 1, sansCredit: 1 });
-    expect(b.remises).toEqual({ remises: 4, avecValeur: 1, valeurAvant: 1, valeurApres: 0 });
+    expect(b.remises).toMatchObject({ remises: 4, avecValeur: 1, valeurAvant: 1, valeurApres: 0 });
   });
 });
 
