@@ -1,4 +1,5 @@
 import { bilanCB, type BilanMoisCB } from "@/lib/controleCB";
+import { comparerCB, lotDuMatinPossible } from "@/lib/ticketZ";
 import { safeEqual } from "@/lib/ingest";
 import { estMois } from "@/lib/laddition";
 import { moisCle } from "@/lib/reglages";
@@ -14,6 +15,7 @@ const decale = (iso: string, n: number) => new Date(Date.parse(`${iso}T00:00:00Z
  * GET /api/cron/controle-cb?mois=AAAA-MM[,…][&r=19e] (Authorization: Bearer CRON_SECRET), lancé à la main par le
  * workflow « Rattrapage et contrôle CB ». Rapproche chaque journée du mois (CB du Z contre remises CB) et ne renvoie
  * que des compteurs : le journal du workflow est public, aucun montant ni libellé n'en sort.
+ * &detail=1 : détail de chaque crédit dans le journal Vercel (privé), jamais dans la réponse.
  * &releve=1 : relève d'abord la banque (lecture seule) sans attendre l'intervalle de 8 h, pour les restaurants reliés.
  */
 export async function GET(request: Request) {
@@ -46,6 +48,34 @@ export async function GET(request: Request) {
       return { id: d.id, date: d.get("date") as string, amount: d.get("montant") as number, libelle: (d.get("libelle") as string) ?? "", ...(valeur ? { valeur } : {}) };
     });
     out[r.id] = Object.fromEntries(mois.map((m) => [m, bilanCB(m, caisse, lignes)]));
+    // &detail=1 : chaque crédit du mois (règle déduite) dans le journal Vercel, privé ; la réponse, publique, reste en compteurs.
+    if (q.get("detail") === "1") {
+      const sans = lignes.map((b) => ({ id: b.id, date: b.date, amount: b.amount, libelle: b.libelle }));
+      const positifs = sans.filter((b) => b.amount > 0);
+      const vus = new Set<string>();
+      const premiere = sans.reduce((m, b) => (b.date < m ? b.date : m), "9999");
+      console.log("controle-cb detail", r.id, JSON.stringify({ premiereLigne: premiere, lignes: sans.length }));
+      for (const c of caisse.filter((x) => x.amount > 0 && mois.some((m) => x.date.startsWith(m))).sort((a, b) => a.date.localeCompare(b.date))) {
+        const x = comparerCB(c.date, caisse, positifs, { lignes: sans });
+        if (!x.banque || vus.has(x.banque.date)) {
+          if (!x.banque) console.log("controle-cb detail", r.id, JSON.stringify({ jour: c.date, caisse: c.amount, statut: x.statut }));
+          continue;
+        }
+        vus.add(x.banque.date);
+        console.log(
+          "controle-cb detail",
+          r.id,
+          JSON.stringify({
+            credit: x.banque.date,
+            jours: x.joursCouverts?.map((j) => [j.date, j.amount]),
+            caisse: x.caisse,
+            banque: x.banque.montant,
+            ecart: x.ecart,
+            lots: x.remises?.map((b) => [b.date, b.amount, lotDuMatinPossible({ ...b, valeur: undefined }) ? "0" : "1", b.valeurDeduite ? "matin" : ""]),
+          }),
+        );
+      }
+    }
   }
   return Response.json({ ...(Object.keys(releve).length ? { releve } : {}), ...out });
 }
