@@ -274,12 +274,12 @@ function BilanCard({ b, mois, onFournisseur }: { b: BilanFournisseur; mois: stri
         </div>
         {reste > 0 && <span className="shrink-0 font-semibold tabular-nums text-danger">{formatEuros(reste)}</span>}
       </div>
-      <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
+      <div className="grid grid-cols-6 gap-1 sm:grid-cols-12">
         {mois.map((m) => {
           const l = b.mois.find((x) => x.mois === m);
           const e = l?.etat ?? "rien";
           return (
-            <div key={m} title={`${nomMois(m)} : ${ETAT[e].label}${l?.facture ? ` (${formatEuros(l.facture)})` : ""}`} className={`min-w-11 shrink-0 rounded px-1 py-1 text-center text-[11px] leading-tight ${ETAT[e].classe}`}>
+            <div key={m} title={`${nomMois(m)} : ${ETAT[e].label}${l?.facture ? ` (${formatEuros(l.facture)})` : ""}`} className={`rounded px-0.5 py-1 text-center text-[11px] leading-tight ${ETAT[e].classe}`}>
               <div>{nomMois(m)}</div>
               <div className="tabular-nums">{l?.nbFactures ? l.nbFactures : "·"}</div>
             </div>
