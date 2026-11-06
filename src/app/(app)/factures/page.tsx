@@ -11,6 +11,7 @@ import { controlerPrelevement, echeanceVirement, grouperParFournisseur, referenc
 import type { BankTransaction, Invoice, ModePaiement, StatutFacture, Supplier, WithId } from "@/lib/types";
 import { SupplierForm } from "@/components/SupplierForm";
 import { ReleveBlock } from "@/components/ReleveBlock";
+import { RapprochementFournisseurs } from "@/components/RapprochementFournisseurs";
 import type { InboxDoc } from "@/lib/ingest";
 import type { Releve } from "@/lib/releves";
 import type { ReactNode } from "react";
@@ -32,7 +33,7 @@ export default function FacturesPage() {
   const banque = useCollection<BankTransaction>("bankTransactions", "date", true);
   const releves = useCollection<Releve>("releves", "mois", true);
   const inbox = useCollection<InboxDoc>("inbox", "receivedAt", true);
-  const [vue, setVue] = useState<"paiements" | "liste">("paiements");
+  const [vue, setVue] = useState<"paiements" | "liste" | "banque">("paiements");
   const [editing, setEditing] = useState<WithId<Invoice> | "new" | null>(null);
   const [fournisseur, setFournisseur] = useState<WithId<Supplier> | null>(null);
   const close = useCallback(() => setEditing(null), []);
@@ -122,6 +123,7 @@ export default function FacturesPage() {
           Commencez par <Link className="underline" href="/fournisseurs">ajouter un fournisseur</Link>.
         </p>
       )}
+      {vue !== "banque" && (<>
       <Field label="Mois"><Input type="month" value={mois} onChange={(e) => setMois(e.target.value || thisMonth())} className="sm:w-56" /></Field>
 
       <div className="my-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -130,18 +132,21 @@ export default function FacturesPage() {
         <Card><div className="text-xs text-muted">Total TTC</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totals.ttc)}</div></Card>
         <Card><div className="text-xs text-muted">dont TVA</div><div className="text-lg font-semibold tabular-nums">{formatEuros(totals.tva)}</div></Card>
       </div>
+      </>)}
 
-      <div className="mb-4 grid grid-cols-2 rounded-control border border-border bg-surface p-1 text-sm font-medium sm:inline-grid sm:w-96" role="tablist">
-        {(["paiements", "liste"] as const).map((v) => (
-          <button key={v} role="tab" aria-selected={vue === v} onClick={() => setVue(v)} className={`min-h-11 rounded-[10px] ${vue === v ? "bg-bar text-white" : "text-muted"}`}>
-            {v === "paiements" ? "Par fournisseur" : "Toutes les factures"}
+      <div className="mb-4 grid grid-cols-3 rounded-control border border-border bg-surface p-1 text-sm font-medium sm:inline-grid sm:w-[36rem]" role="tablist">
+        {(["paiements", "liste", "banque"] as const).map((v) => (
+          <button key={v} role="tab" aria-selected={vue === v} onClick={() => setVue(v)} className={`min-h-11 rounded-[10px] px-1 leading-tight ${vue === v ? "bg-bar text-white" : "text-muted"}`}>
+            {v === "paiements" ? "Par fournisseur" : v === "liste" ? "Toutes les factures" : "Banque depuis janvier"}
           </button>
         ))}
       </div>
 
       <ErrorBox message={error} />
-      {loading ? (
+      {loading || (vue === "banque" && (banque.loading || suppliers.loading)) ? (
         <p className="text-muted">Chargement…</p>
+      ) : vue === "banque" ? (
+        <RapprochementFournisseurs invoices={items} suppliers={suppliers.items} banque={banque.items} onFournisseur={setFournisseur} />
       ) : month.length === 0 && (vue === "liste" || relevesSeuls.length === 0) ? (
         <Empty>Aucune facture pour ce mois.</Empty>
       ) : vue === "paiements" ? (

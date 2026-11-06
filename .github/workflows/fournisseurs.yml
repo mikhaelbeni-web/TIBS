@@ -1,6 +1,9 @@
 # Lancé à la main. Factures fournisseurs depuis janvier :
 # - mesure : compteurs (mails, factures, banque par mois). Avec « cle », le détail est renvoyé chiffré
 #   (illisible dans ce journal public sans la clé privée correspondante).
+# - rattrapage : relit les mails des mois donnés, lot par lot, sur le budget IA de rattrapage.
+# - budget : fixe ce budget (usd, modele) pour le restaurant.
+# - pointer : marque payées les factures retrouvées au centime sur le relevé bancaire.
 name: Factures fournisseurs depuis janvier (manuel)
 
 on:
@@ -13,7 +16,24 @@ on:
         type: choice
         options:
           - mesure
+          - rattrapage
+          - budget
+          - pointer
           - nettoyer
+      restaurant:
+        description: "19e, 17e ou les deux (rattrapage, budget)"
+        required: false
+        default: "19e"
+        type: choice
+        options: ["19e", "17e", "19e,17e"]
+      mois:
+        description: "Rattrapage : mois, ex. 2026-01,2026-02"
+        required: false
+        default: ""
+      usd:
+        description: "Budget : plafond en dollars, et modèle après une virgule (ex. 100,opus)"
+        required: false
+        default: ""
       cle:
         description: "Clé publique RSA (SPKI DER, base64) pour chiffrer le détail. Vide = compteurs seulement."
         required: false
@@ -24,7 +44,7 @@ permissions:
 
 jobs:
   fournisseurs:
-    if: inputs.action != 'nettoyer'
+    if: inputs.action == 'mesure'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -49,6 +69,45 @@ jobs:
             git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" mesures-chiffrees
             echo "détail chiffré déposé : branche mesures-chiffrees, fichier detail-$GITHUB_RUN_ID.b64"
           fi
+
+  rattrapage:
+    if: inputs.action == 'rattrapage' || inputs.action == 'budget' || inputs.action == 'pointer'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Rattrapage des mails, lot par lot (compteurs seulement)
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          ACTION: ${{ inputs.action }}
+          RESTOS: ${{ inputs.restaurant }}
+          MOIS: ${{ inputs.mois }}
+          USD: ${{ inputs.usd }}
+        run: |
+          appel() { curl -sS -o out.json -w "%{http_code}" --max-time 320 -G -H "Authorization: Bearer $CRON_SECRET" "$@" https://tibs.vercel.app/api/cron/fournisseurs; }
+          for r in $(echo "$RESTOS" | tr ',' ' '); do
+            if [ "$ACTION" = "pointer" ]; then
+              code=$(appel --data-urlencode action=pointer --data-urlencode "r=$r")
+              echo "HTTP $code $(cat out.json)"; continue
+            fi
+            if [ "$ACTION" = "budget" ]; then
+              if ! [[ "$USD" =~ ^[0-9]+(\.[0-9]+)?(,(opus|sonnet|haiku))?$ ]]; then echo "usd attendu, ex. 100,opus"; exit 1; fi
+              code=$(appel --data-urlencode action=budget --data-urlencode "r=$r" --data-urlencode "usd=${USD%%,*}" $( [[ "$USD" == *,* ]] && echo --data-urlencode "modele=${USD#*,}" ))
+              echo "HTTP $code $(cat out.json)"; continue
+            fi
+            for m in $(echo "$MOIS" | tr ',' ' '); do
+              if ! [[ "$m" =~ ^2026-[0-9]{2}$ ]]; then echo "mois ignoré : $m"; continue; fi
+              for i in $(seq 1 15); do
+                code=$(appel --data-urlencode action=rattrapage --data-urlencode "r=$r" --data-urlencode "mois=$m")
+                echo "$r $m lot $i : HTTP $code $(cat out.json)"
+                [ "$code" = "200" ] || break
+                jq -e '.incomplet' out.json > /dev/null || break
+                jq -e '.limite == "budget"' out.json > /dev/null && { echo "budget de rattrapage atteint"; exit 0; }
+              done
+            done
+            # Validation automatique une seule fois par restaurant, à la fin (lecture Firestore lourde).
+            code=$(appel --data-urlencode action=rattrapage --data-urlencode "r=$r" --data-urlencode "mois=${MOIS##*,}" --data-urlencode valider=1)
+            echo "$r validation : HTTP $code $(cat out.json)"
+          done
 
   nettoyer:
     if: inputs.action == 'nettoyer'

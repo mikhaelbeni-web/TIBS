@@ -41,6 +41,7 @@ export interface SyncResult {
   doublons: number; // factures déjà reçues ou saisies (même fournisseur, même numéro)
   erreurs: number;
   incomplet: boolean; // vrai si le temps imparti a été atteint : la suite au prochain passage
+  restants?: number; // mails de la période pas encore examinés à la fin du passage
   releves?: number; // relevés fournisseurs enregistrés
   uberAuto?: number; // récaps Uber enregistrés directement comme versements
   lectures?: number; // PDF lus par Claude
@@ -130,6 +131,25 @@ export async function enregistrerConsommation(statusRef: FirebaseFirestore.Docum
         },
       },
     },
+    { merge: true },
+  );
+}
+
+/** Rattrapage des mois passés : budget, modèle et dépense à part (settings/mail.rattrapage). */
+export function lecteurRattrapage(status: FirebaseFirestore.DocumentData) {
+  const reglages = parseReglages(status.reglages);
+  const r = (status.rattrapage ?? {}) as { budgetUsd?: number; modele?: string; coutUsd?: number };
+  const budget = typeof r.budgetUsd === "number" && r.budgetUsd > 0 ? r.budgetUsd : 0;
+  const modele = r.modele === "opus" || r.modele === "sonnet" || r.modele === "haiku" ? r.modele : reglages.modele;
+  // Budget à 0 : aucune lecture (le lot s'arrête aussitôt), jamais « sans limite ».
+  return new Lecteur({ ...reglages, modele, budgetMensuelUsd: budget || 0.0001, maxLecturesParVerification: 500 }, Number(r.coutUsd ?? 0));
+}
+
+/** Ajoute la dépense d'un lot de rattrapage à son compteur (settings/mail.rattrapage). */
+export async function enregistrerRattrapage(statusRef: FirebaseFirestore.DocumentReference, l: Lecteur) {
+  if (!l.lectures) return;
+  await statusRef.set(
+    { rattrapage: { lectures: FieldValue.increment(l.lectures), coutUsd: FieldValue.increment(Math.round(l.cout * 10_000) / 10_000), maj: Date.now() } },
     { merge: true },
   );
 }
@@ -258,10 +278,18 @@ export async function jetonBoite(rid: RestaurantId, cache = new Map<RestaurantId
  * Relève la boîte Gmail d'un restaurant. Une facture qui mentionne clairement l'autre restaurant
  * (adresse, Prony en copie…) est déposée dans « À vérifier » de cet autre restaurant.
  */
-export async function syncMail(
-  rid: RestaurantId,
-  { budgetMs = 240_000, periode = null }: { budgetMs?: number; periode?: Periode | null } = {},
-): Promise<SyncResult> {
+export interface SyncOptions {
+  budgetMs?: number;
+  periode?: Periode | null;
+  /**
+   * Rattrapage des mois passés : lecture des PDF sur un budget à part (settings/mail.rattrapage), jamais sur
+   * le budget mensuel du relevé quotidien. Quand ce budget est épuisé, le passage s'arrête (les mails restants
+   * ne sont pas journalisés et seront repris au lot suivant) au lieu de créer des lignes non lues.
+   */
+  rattrapage?: boolean;
+}
+
+export async function syncMail(rid: RestaurantId, { budgetMs = 240_000, periode = null, rattrapage = false }: SyncOptions = {}): Promise<SyncResult> {
   const started = Date.now();
   const db = adminDb();
   const home = db.doc(`restaurants/${rid}`);
@@ -275,7 +303,8 @@ export async function syncMail(
   const status = (await statusRef.get()).data() ?? {};
   const rules: MailRules = mergeRules(status.regles);
   const lastRun = typeof status.dernierPassage === "number" ? status.dernierPassage : 0;
-  const lecteur = lecteurPour(status);
+  const lecteur = rattrapage ? lecteurRattrapage(status) : lecteurPour(status);
+  const compter = (l: Lecteur) => (rattrapage ? enregistrerRattrapage(statusRef, l) : enregistrerConsommation(statusRef, l));
   const maxJours = lecteur.reglages.joursPremierReleve;
   // Premier passage : N jours en arrière (Réglages, 31 par défaut). Ensuite : depuis le dernier passage, avec 2 jours de marge.
   const days = lastRun ? Math.min(maxJours, Math.max(3, Math.ceil((started - lastRun) / DAY) + 2)) : maxJours;
@@ -296,11 +325,13 @@ export async function syncMail(
     // Ceux qui ont déjà donné un élément ne sont pas repris (pas de doublon dans « À vérifier »).
     const todo = ids.filter((_, i) => !logs[i].exists || (periode && logs[i].get("type") === "ignore"));
 
+    result.restants = todo.length;
     for (const id of todo) {
-      if (Date.now() - started > budgetMs) {
+      if (Date.now() - started > budgetMs || (rattrapage && !lecteur.peutLire())) {
         result.incomplet = true;
         break;
       }
+      result.restants--;
       result.messagesVus++;
       try {
         const msg = await getMessage(token, id);
@@ -356,7 +387,7 @@ export async function syncMail(
       }
     }
   } catch (e) {
-    await enregistrerConsommation(statusRef, lecteur);
+    await compter(lecteur);
     const reconnect = e instanceof GoogleAuthError;
     const out: SyncResult = { ...result, status: reconnect ? "reconnexion" : "erreur", message: (e as Error).message };
     await statusRef.set({ erreur: out.message, dernierEssai: Date.now() }, { merge: true });
@@ -367,14 +398,14 @@ export async function syncMail(
   result.lectures = lecteur.lectures;
   result.coutUsd = Math.round(lecteur.cout * 10_000) / 10_000;
   result.limite = lecteur.limite;
-  await enregistrerConsommation(statusRef, lecteur);
+  await compter(lecteur);
   await statusRef.set(
     {
       // Passage interrompu (temps écoulé) : on garde l'ancienne date pour que la fenêtre de recherche couvre la suite.
       // Recherche sur une période choisie : ne décale pas le relevé automatique.
       ...(result.incomplet || periode ? {} : { dernierPassage: started }),
-      dernierEssai: started,
-      dernierResultat: { ...result, duree: Date.now() - started, lecturePdf: lecteur.actif },
+      // Un lot de rattrapage ne remplace pas le résultat du relevé quotidien affiché dans « À vérifier ».
+      ...(rattrapage ? {} : { dernierEssai: started, dernierResultat: { ...result, duree: Date.now() - started, lecturePdf: lecteur.actif } }),
       erreur: FieldValue.delete(),
     },
     { merge: true },

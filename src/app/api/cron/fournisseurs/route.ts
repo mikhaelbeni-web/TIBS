@@ -4,6 +4,12 @@ import { RESTAURANTS } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
 import { chiffrerPour } from "@/lib/server/chiffrer";
 import { listMessageIds, refreshAccessToken } from "@/lib/server/google";
+import { syncMail } from "@/lib/server/mailSync";
+import { validerAutomatiquement } from "@/lib/server/autoValider";
+import { isRestaurantId } from "@/lib/restaurants";
+import { FieldValue } from "firebase-admin/firestore";
+import { rapprocher } from "@/lib/rapprochementFournisseurs";
+import type { BankTransaction, Invoice, Supplier, WithId } from "@/lib/types";
 
 export const maxDuration = 300;
 
@@ -19,6 +25,13 @@ const finMois = (m: string) => {
  * En clair : des compteurs seulement (le journal du workflow est public).
  * &cle=<clé publique RSA, SPKI DER base64> : le détail (fournisseurs, débits bancaires, totaux) est renvoyé chiffré
  * pour cette clé, illisible sans la clé privée.
+ *
+ * action=rattrapage&r=19e&mois=2026-01 : relit les mails de ce mois (lot limité à ~4 min ; relancer tant que
+ * « restants » > 0). Lecture des PDF sur le budget de rattrapage (settings/mail.rattrapage), jamais sur le budget
+ * mensuel. &valider=1 : passe de validation automatique à la fin du lot.
+ * action=budget&r=19e&usd=100&modele=opus : fixe le budget de rattrapage (dépense déjà faite conservée).
+ * action=pointer&r=19e : marque payées les factures retrouvées au centime sur le relevé (même calcul que l'onglet
+ * « Banque depuis janvier »). Compteurs seulement en clair.
  */
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -27,6 +40,9 @@ export async function GET(request: Request) {
   }
   try {
     const q = new URL(request.url).searchParams;
+    const action = q.get("action") ?? "mesure";
+    if (action === "rattrapage" || action === "budget") return await rattraper(action, q);
+    if (action === "pointer") return await pointer(q);
     const cle = q.get("cle");
     const compteurs: Record<string, unknown> = {};
     const detail: Record<string, unknown> = {};
@@ -99,4 +115,79 @@ export async function GET(request: Request) {
     const err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
     return Response.json({ erreur: err.slice(0, 400) }, { status: 500 });
   }
+}
+
+async function rattraper(action: string, q: URLSearchParams) {
+  const rid = q.get("r");
+  if (!isRestaurantId(rid)) return Response.json({ erreur: "r=19e ou r=17e attendu" }, { status: 400 });
+  const statusRef = adminDb().doc(`restaurants/${rid}/settings/mail`);
+  if (action === "budget") {
+    const usd = Number(q.get("usd"));
+    const modele = q.get("modele");
+    if (!Number.isFinite(usd) || usd < 0 || usd > 300) return Response.json({ erreur: "usd entre 0 et 300" }, { status: 400 });
+    if (modele && !["opus", "sonnet", "haiku"].includes(modele)) return Response.json({ erreur: "modele inconnu" }, { status: 400 });
+    await statusRef.set({ rattrapage: { budgetUsd: usd, ...(modele ? { modele } : {}), maj: Date.now() } }, { merge: true });
+    const r = (await statusRef.get()).get("rattrapage");
+    return Response.json({ r: rid, budgetUsd: r?.budgetUsd, modele: r?.modele, coutUsd: r?.coutUsd ?? 0, lectures: r?.lectures ?? 0 });
+  }
+  const mois = q.get("mois") ?? "";
+  if (!/^2026-(0[1-9]|1[0-2])$/.test(mois)) return Response.json({ erreur: "mois=2026-MM attendu" }, { status: 400 });
+  const res = await syncMail(rid, { periode: { du: `${mois}-01`, au: finMois(mois) }, rattrapage: true, budgetMs: 230_000 });
+  const auto = q.get("valider") === "1" ? await validerAutomatiquement(rid).catch((e) => ({ erreur: (e as Error).message })) : undefined;
+  if (res.status === "ok" && !res.incomplet) await statusRef.set({ rattrapage: { moisFaits: FieldValue.arrayUnion(mois) } }, { merge: true });
+  const r = (await statusRef.get()).get("rattrapage");
+  // Compteurs seulement : le journal du workflow est public.
+  return Response.json({
+    r: rid,
+    mois,
+    status: res.status,
+    vus: res.messagesVus,
+    nouveaux: res.nouveaux,
+    ignores: res.ignores,
+    doublons: res.doublons,
+    erreurs: res.erreurs,
+    releves: res.releves ?? 0,
+    uberAuto: res.uberAuto ?? 0,
+    lectures: res.lectures ?? 0,
+    restants: res.restants ?? 0,
+    incomplet: res.incomplet,
+    limite: res.limite ?? null,
+    budget: { usd: r?.budgetUsd ?? 0, depense: Math.round(Number(r?.coutUsd ?? 0) * 100) / 100 },
+    ...(auto ? { auto: "erreur" in auto ? { erreur: auto.erreur.slice(0, 200) } : { valides: auto.valides, enDoute: auto.enDoute, ignores: auto.ignores ?? 0 } } : {}),
+    ...(res.message ? { message: res.message.slice(0, 200) } : {}),
+  });
+}
+
+async function pointer(q: URLSearchParams) {
+  const rid = q.get("r");
+  if (!isRestaurantId(rid)) return Response.json({ erreur: "r=19e ou r=17e attendu" }, { status: 400 });
+  const home = adminDb().doc(`restaurants/${rid}`);
+  const [sup, inv, bank, app] = await Promise.all([
+    home.collection("suppliers").get(),
+    home.collection("invoices").get(),
+    home.collection("bankTransactions").get(),
+    home.collection("settings").doc("app").get(),
+  ]);
+  const avec = <T,>(s: FirebaseFirestore.QuerySnapshot) => s.docs.map((d) => ({ id: d.id, ...(d.data() as T) }));
+  const aujourdhui = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Paris" });
+  const r = rapprocher(avec<Supplier>(sup) as WithId<Supplier>[], avec<Invoice>(inv) as WithId<Invoice>[], avec<BankTransaction>(bank) as WithId<BankTransaction>[], {
+    depuis: "2026-01",
+    aujourdhui,
+    horsFournisseurs: (app.get("horsFournisseurs") as string[] | undefined) ?? [],
+  });
+  for (let i = 0; i < r.aPointer.length; i += 400) {
+    const batch = adminDb().batch();
+    for (const p of r.aPointer.slice(i, i + 400)) batch.update(home.collection("invoices").doc(p.factureId), { statut: "payee", datePaiement: p.date, paiement: p.mode });
+    await batch.commit();
+  }
+  const etats: Record<string, number> = {};
+  for (const b of r.fournisseurs) for (const l of b.mois) if (l.etat !== "rien") etats[l.etat] = (etats[l.etat] ?? 0) + 1;
+  return Response.json({
+    r: rid,
+    pointees: r.aPointer.length,
+    fournisseurs: r.fournisseurs.length,
+    moisParEtat: etats,
+    remises: { total: r.remises.length, expliquees: r.remises.filter((x) => x.groupes).length },
+    tiersSansFiche: r.sansFournisseur.length,
+  });
 }
