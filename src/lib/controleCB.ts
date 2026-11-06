@@ -1,14 +1,16 @@
 import { compterValeurs } from "./banque";
 import { isCashDeposit, isUber } from "./cashImport";
 import type { BankLine, CashLine } from "./reconcile";
-import { comparerCB, deduireValeurs, estRemiseCB, lotDuMatinPossible, pointageMoisCB, type ComparaisonCB } from "./ticketZ";
+import { comparerCB, deduireValeurs, estRemiseCB, estVirementTitres, lotDuMatinPossible, pointageMoisCB, type ComparaisonCB } from "./ticketZ";
 
 export interface BilanRegle {
   /** Groupes de crédit (une journée, ou samedi + dimanche) rapprochés. */
   groupes: number;
   /** Écart de 1 € au plus. */
   exacts: number;
-  /** Moins en banque qu'en caisse. */
+  /** Petit manque en banque : titres-restaurant passés en CB (payés à part par les émetteurs). */
+  titres: number;
+  /** Moins en banque qu'en caisse, au-delà des titres-restaurant. */
   negatifs: number;
   /** Plus en banque qu'en caisse : un lot rattaché à la mauvaise journée. */
   positifs: number;
@@ -124,12 +126,11 @@ function anomalies(groupes: ComparaisonCB[], lignes: BankLine[]): Anomalie[] {
 }
 
 export type Famille = "cb" | "uber" | "especes" | "tr" | "amex" | "stripe" | "autre";
-const TITRES = /\b(TRD|CONECS|EDENRED|SWILE|BIMPLI|PLUXEE|SODEXO|APETIZ|UP\s*DEJ|CHEQUE\s*DEJ|TICKET\s*REST|TITRES?\s*REST)/i;
 const AMEX = /AMERICAN\s*EXPRESS|\bAMEX\b/i;
 function famille(b: BankLine): Famille {
   if (estRemiseCB(b)) return "cb";
   if (isUber(b.libelle)) return "uber";
-  if (TITRES.test(b.libelle)) return "tr";
+  if (estVirementTitres(b.libelle)) return "tr";
   if (AMEX.test(b.libelle)) return "amex";
   if (/STRIPE/i.test(b.libelle)) return "stripe";
   if (isCashDeposit(b.libelle)) return "especes";
@@ -156,7 +157,7 @@ function compter(
 ): BilanRegle {
   const credits = lignes.filter((b) => b.amount > 0);
   const vus = new Set<string>();
-  const t: BilanRegle = { groupes: 0, exacts: 0, negatifs: 0, positifs: 0, sansCredit: 0 };
+  const t: BilanRegle = { groupes: 0, exacts: 0, titres: 0, negatifs: 0, positifs: 0, sansCredit: 0 };
   for (const c of cash) {
     if (!c.date.startsWith(mois) || c.amount <= 0) continue;
     const r = comparerCB(c.date, cash, credits, { lignes, today, deduire });
@@ -169,6 +170,7 @@ function compter(
     t.groupes++;
     ecarts.push(r);
     if (Math.abs(r.ecart) <= 100) t.exacts++;
+    else if (r.titres) t.titres++;
     else if (r.ecart > 0) t.positifs++;
     else t.negatifs++;
   }
