@@ -158,7 +158,7 @@ describe("remises CB Caisse d'Épargne", () => {
   });
   it("une journée = remises créditées le jour bancaire suivant, quelle que soit la date du libellé", () => {
     expect(cb("2026-10-16")).toMatchObject({ statut: "ok", caisse: 30000, ecart: 0, banque: { date: "2026-10-17", montant: 30000, jours: 1 } });
-    // Petit manque en banque : CB saisie en caisse sans remise (titre-restaurant carte), à vérifier mais pas une alerte.
+    // Petit manque en banque : CB saisie en caisse sans remise CB, à vérifier mais pas une alerte.
     expect(cb("2026-10-15")).toMatchObject({ statut: "proche", sansRemise: true, banque: { date: "2026-10-16", montant: 97575 }, ecart: -2425 });
   });
   it("samedi soir et dimanche sont crédités ensemble le lundi", () => {

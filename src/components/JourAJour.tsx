@@ -331,9 +331,9 @@ export function JourAJour({
                     )}
                     {cb.sansRemise && (
                       <p className="text-xs text-muted">
-                        Il manque {formatEuros(-(cb.ecart ?? 0))} en remise CB. Cause la plus fréquente : un titre-restaurant carte (Swile, Edenred, Up, Pluxee)
-                        passé sur le TPE mais saisi « CB » en caisse. Il est payé à part, par virement de l&apos;émetteur. Un mode de paiement « Titres-restaurant »
-                        dans L&apos;Addition fait disparaître cet écart.
+                        Il manque {formatEuros(-(cb.ecart ?? 0))} en remise CB : un paiement saisi « CB » en caisse n&apos;est pas passé en remise CB. Causes
+                        possibles : paiement refusé ou annulé au TPE après validation en caisse, autre mode de paiement saisi en CB, carte titre-restaurant passée
+                        sur le TPE (payée à part par l&apos;émetteur).
                       </p>
                     )}
                     {cb.cumul && <Ligne label={`Écart cumulé depuis le ${fr(cb.cumul.depuis)}`}>{formatEuros(cb.cumul.ecart)}</Ligne>}

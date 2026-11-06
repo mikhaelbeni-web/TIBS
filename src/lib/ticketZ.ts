@@ -188,8 +188,8 @@ function parCredit(
       remiseExacte = { sens: ecart < 0 ? "manquant" : "excedent", remise: r };
     }
   }
-  // Il manque un peu de CB en banque : paiement saisi « CB » en caisse sans remise CB (titre-restaurant carte passé
-  // sur le TPE, payé à part par Edenred, Up, Swile ou Pluxee ; ou paiement refusé au TPE). Vu sur octobre 2026 : toujours dans ce sens.
+  // Il manque un peu de CB en banque : paiement saisi « CB » en caisse sans remise CB (paiement refusé ou annulé au TPE,
+  // autre mode saisi en CB, carte titre-restaurant payée à part par l'émetteur). Vu sur octobre 2026 : toujours dans ce sens.
   const sansRemise = statut === "ecart" && ecart < 0 && -ecart <= PLAFOND_SANS_REMISE;
   if (sansRemise) statut = "proche";
   // Cumul : depuis le premier crédit des journées du mois (ou ce crédit, s'il chevauche deux mois).
