@@ -19,6 +19,16 @@ const decale = (iso: string, n: number) => new Date(Date.parse(`${iso}T00:00:00Z
  * &releve=1 : relève d'abord la banque (lecture seule) sans attendre l'intervalle de 8 h, pour les restaurants reliés.
  */
 export async function GET(request: Request) {
+  try {
+    return await controler(request);
+  } catch (e) {
+    // Message d'erreur seulement (jamais de données) : la réponse est affichée dans un journal public.
+    const err = e instanceof Error ? `${e.name}: ${e.message} @ ${(e.stack ?? "").split("\n").slice(1, 3).join(" | ")}` : String(e);
+    return Response.json({ erreur: err.slice(0, 400) }, { status: 500 });
+  }
+}
+
+async function controler(request: Request) {
   const secret = process.env.CRON_SECRET;
   if (!secret || secret.length < 16 || !safeEqual(request.headers.get("authorization") ?? "", `Bearer ${secret}`)) {
     return new Response("Unauthorized", { status: 401 });
@@ -47,13 +57,7 @@ export async function GET(request: Request) {
       const valeur = d.get("valeur") as string | undefined;
       return { id: d.id, date: d.get("date") as string, amount: d.get("montant") as number, libelle: (d.get("libelle") as string) ?? "", ...(valeur ? { valeur } : {}) };
     });
-    try {
-      out[r.id] = Object.fromEntries(mois.map((m) => [m, bilanCB(m, caisse, lignes)]));
-    } catch (e) {
-      // Message d'erreur seulement (jamais de données) : la réponse est affichée dans un journal public.
-      const err = e instanceof Error ? `${e.name}: ${e.message} @ ${(e.stack ?? "").split("\n").slice(1, 3).join(" | ")}` : String(e);
-      return Response.json({ erreur: err.slice(0, 400) }, { status: 500 });
-    }
+    out[r.id] = Object.fromEntries(mois.map((m) => [m, bilanCB(m, caisse, lignes)]));
     // &detail=1 : chaque crédit du mois (règle déduite) dans le journal Vercel, privé ; la réponse, publique, reste en compteurs.
     if (q.get("detail") === "1") {
       const sans = lignes.map((b) => ({ id: b.id, date: b.date, amount: b.amount, libelle: b.libelle }));
@@ -83,5 +87,6 @@ export async function GET(request: Request) {
       }
     }
   }
-  return Response.json({ ...(Object.keys(releve).length ? { releve } : {}), ...out });
+  // Sérialisé ici pour que toute erreur passe par le message ci-dessus.
+  return new Response(JSON.stringify({ ...(Object.keys(releve).length ? { releve } : {}), ...out }), { headers: { "content-type": "application/json" } });
 }
