@@ -83,4 +83,9 @@ describe("réclamation des factures manquantes", () => {
     expect(lignesAReclamer(rapprocher(ancien, []), {}, rep.get("a")).map((l) => l.numero)).toEqual(["FA77415"]);
     expect(lignesAReclamer(rapprocher(recent, []), {}, rep.get("b")).map((l) => l.numero)).toEqual(["FA77543"]);
   });
+
+  it("une facture datée d'avant 2026 n'est pas réclamée", () => {
+    const r = rel({ lignes: [{ numero: "F1", date: "2025-12-15", montantTTC: 100 }, { numero: "F2", date: "2026-01-02", montantTTC: 100 }] });
+    expect(lignesAReclamer(rapprocher(r, [])).map((l) => l.numero)).toEqual(["F2"]);
+  });
 });

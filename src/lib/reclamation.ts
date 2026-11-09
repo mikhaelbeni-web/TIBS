@@ -18,13 +18,16 @@ export interface Reclamation {
 
 const fr = (iso?: string) => (iso ? iso.split("-").reverse().join("/") : "");
 
+/** Début de la comptabilité suivie dans l'app : une facture datée d'avant n'est pas réclamée. */
+export const DEBUT_SUIVI = "2026-01-01";
+
 /**
- * Lignes du relevé à réclamer : non reçues, pas justifiées à la main, montant non nul, et pas reprises sur un
+ * Lignes du relevé à réclamer : datées de 2026 ou après (DEBUT_SUIVI), non reçues, pas justifiées à la main, montant non nul, et pas reprises sur un
  * relevé plus récent du même fournisseur (`ailleurs` : numéros normalisés, comptés et réclamés là-bas).
  */
 export function lignesAReclamer(r: Rapprochement, justifies: Record<string, string> = {}, ailleurs?: Set<string>): ReleveLigne[] {
   return r.lignes
-    .filter((l) => l.etat === "non_recue" && l.ligne.montantTTC !== 0 && !justifies[cleEcart("ligne", l.ligne.numero)] && !ailleurs?.has(normNumero(l.ligne.numero)))
+    .filter((l) => l.etat === "non_recue" && l.ligne.montantTTC !== 0 && !(l.ligne.date && l.ligne.date < DEBUT_SUIVI) && !justifies[cleEcart("ligne", l.ligne.numero)] && !ailleurs?.has(normNumero(l.ligne.numero)))
     .map((l) => l.ligne);
 }
 
