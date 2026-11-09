@@ -20,6 +20,7 @@ on:
           - budget
           - pointer
           - releves
+          - releves-passe
           - nettoyer
       restaurant:
         description: "19e, 17e ou les deux (rattrapage, budget)"
@@ -45,7 +46,7 @@ permissions:
 
 jobs:
   fournisseurs:
-    if: inputs.action == 'mesure' || inputs.action == 'releves'
+    if: inputs.action == 'mesure' || inputs.action == 'releves' || inputs.action == 'releves-passe'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

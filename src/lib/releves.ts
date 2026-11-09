@@ -1,3 +1,4 @@
+import type { Reclamation } from "./reclamation";
 import type { Invoice, WithId } from "./types";
 
 /**
@@ -27,7 +28,15 @@ export interface Releve {
   coherent: boolean;
   /** Écarts clos à la main : clé de l'écart → note. */
   justifies?: Record<string, string>;
-  source: { messageId: string; boite?: string; attachment?: string; from?: string; subject?: string };
+  /** Mails envoyés au fournisseur pour réclamer les factures manquantes. */
+  reclamations?: Reclamation[];
+  /**
+   * Recherche dans les boîtes Gmail des factures du relevé qu'on n'a pas : une facture trouvée dans un mail
+   * n'est pas « manquante » (elle attend d'être relevée), on ne la réclame pas au fournisseur.
+   * Clés = numéro normalisé (normNumero).
+   */
+  verif?: { le: number; cherchees: string[]; trouvees: Record<string, { boite: string; messageId: string; date?: string; objet?: string }> };
+  source: { messageId: string; boite?: string; attachment?: string; from?: string; subject?: string; receivedAt?: string };
   createdAt: number;
 }
 
