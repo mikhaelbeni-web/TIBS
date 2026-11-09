@@ -62,7 +62,7 @@ export function brouillonReclamation(
     "",
     liste,
     "",
-    `Pourriez-vous nous ${plusieurs ? "les" : "la"} envoyer par retour de mail, ${pourquoi} ?`,
+    `Pourriez-vous nous ${plusieurs ? "les envoyer" : "l'envoyer"} par retour de mail, ${pourquoi} ?`,
     "",
     "Merci d'avance et bonne journée,",
     "",

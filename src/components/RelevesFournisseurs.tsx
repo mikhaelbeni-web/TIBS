@@ -155,7 +155,7 @@ function ReleveLigneCarte({ c, onReclamer }: { c: ReleveCalcule; onReclamer: () 
               {c.manquantes.map((m) => (
                 <li key={m.ligne.numero} className="flex items-start justify-between gap-2 py-2">
                   <div className="min-w-0">
-                    <div className="truncate font-medium">
+                    <div className="break-all font-medium">
                       N° {m.ligne.numero}
                       {m.ligne.date ? <span className="font-normal text-muted"> du {fr(m.ligne.date)}</span> : null}
                     </div>
