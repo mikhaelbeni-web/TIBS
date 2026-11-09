@@ -75,4 +75,9 @@ describe("relevés fournisseurs", () => {
     expect(estCoherent({ lignes: [{ numero: "1", montantTTC: 1000 }], totalTTC: 1000 })).toBe(true);
     expect(estCoherent({ lignes: [{ numero: "1", montantTTC: 1000 }], totalTTC: 5000 })).toBe(false);
   });
+
+  it("numéro avec un préfixe d'un seul côté (Rouquette 32/VTE/…)", () => {
+    const r = rapprocher(rel([{ numero: "20261000042", montantTTC: 1000 }, { numero: "123", montantTTC: 500 }]), [f("a", "32/VTE/20261000042", 1000), f("b", "99123", 700)]);
+    expect(r.lignes.map((l) => l.etat)).toEqual(["ok", "non_recue"]);
+  });
 });
