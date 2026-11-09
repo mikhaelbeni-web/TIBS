@@ -74,6 +74,19 @@ export default function Dashboard() {
       sub: dpae.late ? `${dpae.late} en retard` : "Aucune en retard",
       alert: dpae.late > 0,
     },
+    {
+      href: "/factures?vue=releves",
+      title: "Factures manquantes",
+      value: String(settings.facturesManquantes?.aReclamer ?? 0),
+      sub: settings.facturesManquantes
+        ? settings.facturesManquantes.aReclamer
+          ? `à réclamer à ${settings.facturesManquantes.fournisseurs} fournisseur(s)${settings.facturesManquantes.reclamees ? ` · ${settings.facturesManquantes.reclamees} déjà réclamée(s)` : ""}`
+          : settings.facturesManquantes.reclamees
+            ? `${settings.facturesManquantes.reclamees} réclamée(s), en attente`
+            : "Relevés fournisseurs à jour"
+        : "Contrôle des relevés pas encore fait",
+      alert: (settings.facturesManquantes?.aReclamer ?? 0) > 0,
+    },
     { href: "/factures", title: "Factures à payer", value: formatEuros(due.total), sub: `${due.count} facture(s)`, alert: false },
     {
       href: "/rapprochement",

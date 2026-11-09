@@ -12,6 +12,7 @@ import type { BankTransaction, Invoice, ModePaiement, StatutFacture, Supplier, W
 import { SupplierForm } from "@/components/SupplierForm";
 import { ReleveBlock } from "@/components/ReleveBlock";
 import { RapprochementFournisseurs } from "@/components/RapprochementFournisseurs";
+import { RelevesFournisseurs } from "@/components/RelevesFournisseurs";
 import type { InboxDoc } from "@/lib/ingest";
 import type { Releve } from "@/lib/releves";
 import type { ReactNode } from "react";
@@ -34,7 +35,25 @@ export default function FacturesPage() {
   const banque = useCollection<BankTransaction>("bankTransactions", "date", true);
   const releves = useCollection<Releve>("releves", "mois", true);
   const inbox = useCollection<InboxDoc>("inbox", "receivedAt", true);
-  const [vue, setVue] = useState<"paiements" | "liste" | "banque">("paiements");
+  const [vue, setVue] = useState<"paiements" | "liste" | "banque" | "releves">("paiements");
+  // Lien direct vers un onglet (?vue=releves, depuis l'accueil ou au retour de Google).
+  const [retourGoogle, setRetourGoogle] = useState<string | null>(null);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const v = q.get("vue");
+    const g = q.get("gmail");
+    if (g)
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setRetourGoogle(
+        g === "ok"
+          ? "Envoi autorisé : tu peux maintenant réclamer les factures manquantes."
+          : g === "envoi_refuse"
+            ? "Google n'a pas donné le droit d'envoyer : coche la case « Envoyer des e-mails » sur l'écran Google."
+            : "La connexion Google n'a pas abouti, réessaie.",
+      );
+    // Lecture unique de l'adresse au chargement (pas de rendu serveur de l'onglet).
+    if (v === "releves" || v === "banque" || v === "liste") setVue(v);
+  }, []);
   const [editing, setEditing] = useState<WithId<Invoice> | "new" | null>(null);
   const [fournisseur, setFournisseur] = useState<WithId<Supplier> | null>(null);
   const close = useCallback(() => setEditing(null), []);
@@ -124,7 +143,7 @@ export default function FacturesPage() {
           Commencez par <Link className="underline" href="/fournisseurs">ajouter un fournisseur</Link>.
         </p>
       )}
-      {vue !== "banque" && (<>
+      {vue !== "banque" && vue !== "releves" && (<>
       <Field label="Mois"><Input type="month" value={mois} onChange={(e) => setMois(e.target.value || thisMonth())} className="sm:w-56" /></Field>
 
       <div className="my-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -135,17 +154,20 @@ export default function FacturesPage() {
       </div>
       </>)}
 
-      <div className="mb-4 grid grid-cols-3 rounded-control border border-border bg-surface p-1 text-sm font-medium sm:inline-grid sm:w-[36rem]" role="tablist">
-        {(["paiements", "liste", "banque"] as const).map((v) => (
+      <div className="mb-4 grid grid-cols-2 rounded-control border border-border bg-surface p-1 text-sm font-medium sm:inline-grid sm:w-[44rem] sm:grid-cols-4" role="tablist">
+        {(["paiements", "liste", "banque", "releves"] as const).map((v) => (
           <button key={v} role="tab" aria-selected={vue === v} onClick={() => setVue(v)} className={`min-h-11 rounded-[10px] px-1 leading-tight ${vue === v ? "bg-bar text-white" : "text-muted"}`}>
-            {v === "paiements" ? "Par fournisseur" : v === "liste" ? "Toutes les factures" : "Banque depuis janvier"}
+            {v === "paiements" ? "Par fournisseur" : v === "liste" ? "Toutes les factures" : v === "banque" ? "Banque depuis janvier" : "Relevés fournisseurs"}
           </button>
         ))}
       </div>
 
       <ErrorBox message={error} />
-      {loading || (vue === "banque" && (banque.loading || suppliers.loading)) ? (
+      {retourGoogle && vue === "releves" && <p className="mb-3 rounded-control bg-surface-2 p-3 text-sm">{retourGoogle}</p>}
+      {loading || (vue === "banque" && (banque.loading || suppliers.loading)) || (vue === "releves" && (releves.loading || inbox.loading)) ? (
         <p className="text-muted">Chargement…</p>
+      ) : vue === "releves" ? (
+        <RelevesFournisseurs releves={releves.items} factures={items} enAttente={enAttente} suppliers={suppliers.items} />
       ) : vue === "banque" ? (
         <RapprochementFournisseurs invoices={items} suppliers={suppliers.items} banque={banque.items} onFournisseur={setFournisseur} />
       ) : month.length === 0 && (vue === "liste" || relevesSeuls.length === 0) ? (

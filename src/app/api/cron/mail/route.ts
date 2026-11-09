@@ -7,6 +7,7 @@ import { validerAutomatiquement, type AutoResult } from "@/lib/server/autoValide
 import { releveBanqueDu } from "@/lib/banque";
 import { syncBanque, type BanqueSyncResult } from "@/lib/server/banqueSync";
 import { majIncoherencesSiBesoin } from "@/lib/server/incoherences";
+import { passeReleves } from "@/lib/server/relevesPasse";
 
 export const maxDuration = 300;
 
@@ -68,6 +69,14 @@ export async function GET(request: Request) {
     const n = await majIncoherencesSiBesoin(r.id, b?.status === "ok" && b.nouvelles > 0);
     if (n) incoherences[r.id] = n;
   }
+  // Relevés fournisseurs (une fois par jour et par restaurant) : repérage + factures manquantes. Compteurs seulement.
+  const releves: Record<string, unknown> = {};
+  for (const r of RESTAURANTS) {
+    const left = 285_000 - (Date.now() - started);
+    if (left < 25_000) break;
+    const p = await passeReleves(r.id, { budgetMs: left - 10_000 }).catch((e) => ({ erreur: (e as Error).message.slice(0, 200) }));
+    if (p) releves[r.id] = p;
+  }
   const erreur = Object.values(out).some((x) => x.status === "erreur");
-  return Response.json({ ...out, relu, banque, auto, contre, incoherences }, { status: erreur ? 502 : 200 });
+  return Response.json({ ...out, relu, banque, auto, contre, incoherences, releves }, { status: erreur ? 502 : 200 });
 }

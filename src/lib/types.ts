@@ -115,6 +115,8 @@ export interface AppSettings {
   comptableNom?: string;
   /** Mois de TVA envoyés au comptable : { "2026-10": "2026-11-08" } (date d'envoi). */
   tvaEnvois?: Record<string, string>;
+  /** Écrit chaque jour par le contrôle des relevés fournisseurs (Factures > Relevés fournisseurs). */
+  facturesManquantes?: { aReclamer: number; fournisseurs: number; reclamees: number; le: number };
 }
 
 /** bankTransactions/{id} : lignes importées du relevé (id déterministe pour éviter les doublons). */

@@ -9,6 +9,11 @@ import { isRestaurantId, type RestaurantId } from "@/lib/restaurants";
  * GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET : identifiants OAuth « Application Web » (console Google Cloud).
  */
 export const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+/**
+ * Envoi seulement (ne donne aucun accès en lecture en plus) : demandé à part, quand le gérant veut réclamer
+ * des factures manquantes depuis l'app. Un mail ne part que sur son clic, après aperçu.
+ */
+export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 
 function creds() {
   const id = process.env.GOOGLE_CLIENT_ID;
@@ -25,31 +30,34 @@ export function appOrigin(request: Request): string {
 export const redirectUri = (request: Request) => `${appOrigin(request)}/api/gmail/callback`;
 
 /** « state » OAuth signé : identifie le gérant et le restaurant concernés, valable 10 minutes. */
-export function signState(uid: string, rid: RestaurantId, now = Date.now()): string {
-  const payload = Buffer.from(JSON.stringify({ uid, rid, exp: now + 10 * 60_000 })).toString("base64url");
+export function signState(uid: string, rid: RestaurantId, now = Date.now(), envoi = false, retour?: string): string {
+  const payload = Buffer.from(JSON.stringify({ uid, rid, exp: now + 10 * 60_000, ...(envoi ? { envoi: true } : {}), ...(retour ? { retour } : {}) })).toString("base64url");
   const sig = createHmac("sha256", creds().secret).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
 
-export function verifyState(state: string, now = Date.now()): { uid: string; rid: RestaurantId } | null {
+export function verifyState(state: string, now = Date.now()): { uid: string; rid: RestaurantId; envoi: boolean; retour?: string } | null {
   const [payload, sig] = state.split(".");
   if (!payload || !sig) return null;
   const expected = createHmac("sha256", creds().secret).update(payload).digest("base64url");
   if (!safeEqual(sig, expected)) return null;
   try {
-    const { uid, rid, exp } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return typeof uid === "string" && isRestaurantId(rid) && typeof exp === "number" && exp > now ? { uid, rid } : null;
+    const { uid, rid, exp, envoi, retour } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!(typeof uid === "string" && isRestaurantId(rid) && typeof exp === "number" && exp > now)) return null;
+    // Retour vers une page de l'app seulement (chemin interne).
+    const r = typeof retour === "string" && /^\/[a-z0-9-]*(\?[A-Za-z0-9=&_-]*)?$/.test(retour) ? retour : undefined;
+    return { uid, rid, envoi: envoi === true, ...(r ? { retour: r } : {}) };
   } catch {
     return null;
   }
 }
 
-export function authUrl(request: Request, state: string, loginHint?: string): string {
+export function authUrl(request: Request, state: string, loginHint?: string, envoi = false): string {
   const u = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   u.searchParams.set("client_id", creds().id);
   u.searchParams.set("redirect_uri", redirectUri(request));
   u.searchParams.set("response_type", "code");
-  u.searchParams.set("scope", GMAIL_SCOPE);
+  u.searchParams.set("scope", envoi ? `${GMAIL_SCOPE} ${GMAIL_SEND_SCOPE}` : GMAIL_SCOPE);
   u.searchParams.set("access_type", "offline"); // pour obtenir un refresh token
   u.searchParams.set("prompt", "consent");
   u.searchParams.set("include_granted_scopes", "true");
@@ -110,6 +118,19 @@ export async function listMessageIds(token: string, q: string, max = 500): Promi
     pageToken = page.nextPageToken;
   } while (pageToken && ids.length < max);
   return ids.slice(0, max);
+}
+
+/** Envoie un message MIME déjà construit (base64url), dans le fil `threadId` s'il est donné. */
+export async function sendRawMessage(token: string, raw: string, threadId?: string): Promise<{ id: string; threadId: string }> {
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ raw, ...(threadId ? { threadId } : {}) }),
+  });
+  if (res.status === 401) throw new GoogleAuthError("Accès Gmail refusé : reconnecte la boîte.");
+  if (res.status === 403) throw new GoogleAuthError("La boîte n'a pas encore autorisé l'envoi de mails depuis l'app.");
+  if (!res.ok) throw new Error(`Gmail a refusé l'envoi (${res.status}).`);
+  return (await res.json()) as { id: string; threadId: string };
 }
 
 export const getMessage = (token: string, id: string) => gmail<GmailMessage>(token, `messages/${id}?format=full`);

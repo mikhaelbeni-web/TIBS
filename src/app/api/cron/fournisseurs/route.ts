@@ -5,6 +5,7 @@ import { adminDb } from "@/lib/server/admin";
 import { chiffrerPour } from "@/lib/server/chiffrer";
 import { getMessage, listMessageIds, refreshAccessToken } from "@/lib/server/google";
 import { syncMail } from "@/lib/server/mailSync";
+import { passeReleves } from "@/lib/server/relevesPasse";
 import { validerAutomatiquement } from "@/lib/server/autoValider";
 import { isRestaurantId } from "@/lib/restaurants";
 import { FieldValue } from "firebase-admin/firestore";
@@ -44,6 +45,11 @@ export async function GET(request: Request) {
     if (action === "rattrapage" || action === "budget") return await rattraper(action, q);
     if (action === "pointer") return await pointer(q);
     if (action === "releves") return await mesurerReleves(q.get("cle"));
+    if (action === "releves-passe") {
+      const res: Record<string, unknown> = {};
+      for (const r of RESTAURANTS) res[r.id] = await passeReleves(r.id, { budgetMs: 130_000, force: true, maxLectures: 25 }).catch((e) => ({ erreur: (e as Error).message.slice(0, 200) }));
+      return Response.json(res);
+    }
     const cle = q.get("cle");
     const compteurs: Record<string, unknown> = {};
     const detail: Record<string, unknown> = {};

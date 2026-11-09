@@ -23,6 +23,7 @@ import { adminDb } from "@/lib/server/admin";
 import { moisCle, parseConsommation, parseReglages } from "@/lib/reglages";
 import { estReleve, extractFacture, extractUber, Lecteur, type ExtractedReleve } from "@/lib/server/extract";
 import { estCoherent, releveDocId, type Releve } from "@/lib/releves";
+import { moisReleve } from "@/lib/reclamation";
 import { getAttachment, getMessage, GoogleAuthError, listMessageIds, refreshAccessToken } from "@/lib/server/google";
 
 /**
@@ -54,7 +55,7 @@ const MAX_PDF_BYTES = 15 * 1024 * 1024;
 const MAX_PDF_PER_MAIL = 6;
 const DAY = 86_400_000;
 
-function sourceOf(msg: GmailMessage, attachment?: string): InboxSource {
+export function sourceOf(msg: GmailMessage, attachment?: string): InboxSource {
   const received = Number(msg.internalDate);
   return {
     messageId: msg.id,
@@ -65,7 +66,7 @@ function sourceOf(msg: GmailMessage, attachment?: string): InboxSource {
   };
 }
 
-async function pdfData(token: string, msg: GmailMessage, ref: ReturnType<typeof pdfAttachments>[number]): Promise<string> {
+export async function pdfData(token: string, msg: GmailMessage, ref: ReturnType<typeof pdfAttachments>[number]): Promise<string> {
   if (ref.data) return Buffer.from(ref.data, "base64url").toString("base64");
   return getAttachment(token, msg.id, ref.attachmentId!);
 }
@@ -90,8 +91,9 @@ export async function enregistrerReleve(rid: RestaurantId, nom: string, x: Extra
   const home = db.doc(`restaurants/${rid}`);
   const suppliers = await home.collection("suppliers").get();
   const sup = suppliers.docs.find((d) => String(d.get("nom") ?? "").toLowerCase() === nom.toLowerCase());
-  const mois = (x.periodeFin ?? x.dateReleve ?? source.receivedAt ?? new Date().toISOString()).slice(0, 7);
-  const id = releveDocId(nom, x.numero, x.periodeFin ? `${mois}` : source.messageId);
+  // Période de l'exercice (avril → mars) sur certains extraits de compte : le mois vient des lignes.
+  const mois = moisReleve(x, source.receivedAt);
+  const id = releveDocId(nom, x.numero, x.periodeFin ? (x.periodeFin.slice(0, 7) === mois ? mois : `${mois}-${source.messageId}`) : source.messageId);
   const ref = home.collection("releves").doc(id);
   const avant = await ref.get();
   const releve: Releve = {
@@ -109,6 +111,7 @@ export async function enregistrerReleve(rid: RestaurantId, nom: string, x: Extra
     lignes: x.lignes,
     coherent: estCoherent(x),
     ...(avant.get("justifies") ? { justifies: avant.get("justifies") } : {}),
+    ...(avant.get("reclamations") ? { reclamations: avant.get("reclamations") } : {}),
     source: JSON.parse(JSON.stringify(source)),
     createdAt: Date.now(),
   };
