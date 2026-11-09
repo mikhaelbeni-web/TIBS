@@ -90,8 +90,15 @@ export function rapprocher(r: Releve, factures: WithId<Invoice>[], enAttente: st
   const attente = new Set(enAttente.map(normNumero));
   const justifies = r.justifies ?? {};
 
+  // Même numéro écrit avec un préfixe en plus d'un côté (« 32/VTE/20261000042 » sur la facture, « 20261000042 »
+  // sur le relevé) : le plus court doit terminer le plus long et compter au moins 6 caractères.
+  const parSuffixe = (n: string) => {
+    if (n.length < 6) return undefined;
+    const c = factures.filter((f) => f.numero && libres.has(f.id) && (normNumero(f.numero).endsWith(n) || (normNumero(f.numero).length >= 6 && n.endsWith(normNumero(f.numero)))));
+    return c.length === 1 ? c[0] : undefined;
+  };
   const lignes: EtatLigne[] = r.lignes.map((ligne) => {
-    const f = parNumero.get(normNumero(ligne.numero));
+    const f = parNumero.get(normNumero(ligne.numero)) ?? parSuffixe(normNumero(ligne.numero));
     if (f && libres.has(f.id)) {
       libres.delete(f.id);
       if (Math.abs(f.montantTTC - ligne.montantTTC) > 1) return { etat: "montant", ligne, facture: f };
