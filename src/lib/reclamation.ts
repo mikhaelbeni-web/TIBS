@@ -18,9 +18,32 @@ export interface Reclamation {
 
 const fr = (iso?: string) => (iso ? iso.split("-").reverse().join("/") : "");
 
-/** Lignes du relevé à réclamer : non reçues, et pas justifiées à la main. */
-export function lignesAReclamer(r: Rapprochement, justifies: Record<string, string> = {}): ReleveLigne[] {
-  return r.lignes.filter((l) => l.etat === "non_recue" && !justifies[cleEcart("ligne", l.ligne.numero)]).map((l) => l.ligne);
+/**
+ * Lignes du relevé à réclamer : non reçues, pas justifiées à la main, montant non nul, et pas reprises sur un
+ * relevé plus récent du même fournisseur (`ailleurs` : numéros normalisés, comptés et réclamés là-bas).
+ */
+export function lignesAReclamer(r: Rapprochement, justifies: Record<string, string> = {}, ailleurs?: Set<string>): ReleveLigne[] {
+  return r.lignes
+    .filter((l) => l.etat === "non_recue" && l.ligne.montantTTC !== 0 && !justifies[cleEcart("ligne", l.ligne.numero)] && !ailleurs?.has(normNumero(l.ligne.numero)))
+    .map((l) => l.ligne);
+}
+
+/**
+ * Un relevé de compte reprend les factures encore dues des mois précédents : la même facture figure sur
+ * plusieurs relevés. Pour chaque relevé, les numéros qui figurent aussi sur un relevé plus récent du même
+ * fournisseur (ils ne sont comptés et réclamés qu'une fois, sur le plus récent).
+ */
+export function reprisesPlusRecentes<R extends Pick<Releve, "fournisseur" | "supplierId" | "lignes" | "source" | "dateReleve" | "mois"> & { id: string }>(
+  releves: R[],
+): Map<string, Set<string>> {
+  const date = (r: R) => r.source.receivedAt ?? r.dateReleve ?? `${r.mois}-28`;
+  const cle = (r: R) => r.supplierId ?? nomCle(r.fournisseur);
+  const out = new Map<string, Set<string>>();
+  for (const r of releves) {
+    const plusRecents = releves.filter((x) => x.id !== r.id && cle(x) === cle(r) && (date(x) > date(r) || (date(x) === date(r) && x.id > r.id)));
+    out.set(r.id, new Set(plusRecents.flatMap((x) => x.lignes.map((l) => normNumero(l.numero)))));
+  }
+  return out;
 }
 
 /** Dernière réclamation qui couvrait cette ligne (même numéro), s'il y en a une. */

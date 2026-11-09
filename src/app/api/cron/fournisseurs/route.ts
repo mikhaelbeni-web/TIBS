@@ -5,7 +5,7 @@ import { adminDb } from "@/lib/server/admin";
 import { chiffrerPour } from "@/lib/server/chiffrer";
 import { getMessage, listMessageIds, refreshAccessToken } from "@/lib/server/google";
 import { syncMail } from "@/lib/server/mailSync";
-import { passeReleves } from "@/lib/server/relevesPasse";
+import { chercherDansBoites, passeReleves } from "@/lib/server/relevesPasse";
 import { validerAutomatiquement } from "@/lib/server/autoValider";
 import { isRestaurantId } from "@/lib/restaurants";
 import { FieldValue } from "firebase-admin/firestore";
@@ -45,6 +45,7 @@ export async function GET(request: Request) {
     if (action === "rattrapage" || action === "budget") return await rattraper(action, q);
     if (action === "pointer") return await pointer(q);
     if (action === "releves") return await mesurerReleves(q.get("cle"));
+    if (action === "calibrage") return await calibrer(q.get("cle"));
     if (action === "releves-passe") {
       const res: Record<string, unknown> = {};
       for (const r of RESTAURANTS) res[r.id] = await passeReleves(r.id, { budgetMs: 130_000, force: true, maxLectures: 25 }).catch((e) => ({ erreur: (e as Error).message.slice(0, 200) }));
@@ -239,4 +240,38 @@ async function mesurerReleves(cle: string | null) {
     if (cle) detail[r.id] = { releves: releves.docs.map((d) => ({ id: d.id, ...d.data() })), mails };
   }
   return Response.json({ compteurs, ...(cle ? { chiffre: chiffrerPour(cle, detail) } : {}) });
+}
+
+/**
+ * action=calibrage&cle=… : la recherche par numéro dans Gmail retrouve-t-elle les factures qu'on a bien reçues
+ * par mail ? Pour chaque fournisseur qui envoie des relevés, jusqu'à 6 factures venues d'un mail sont cherchées.
+ * Détail chiffré ; en clair, le taux global seulement.
+ */
+async function calibrer(cle: string | null) {
+  const detail: Record<string, unknown> = {};
+  let total = 0;
+  let trouvees = 0;
+  for (const r of RESTAURANTS) {
+    const home = adminDb().doc(`restaurants/${r.id}`);
+    const [releves, invoices] = await Promise.all([home.collection("releves").select("fournisseur", "supplierId").get(), home.collection("invoices").get()]);
+    const noms = new Set(releves.docs.map((d) => String(d.get("fournisseur") ?? "").toLowerCase()));
+    const ids = new Set(releves.docs.map((d) => d.get("supplierId")).filter(Boolean));
+    const parFournisseur = new Map<string, string[]>();
+    for (const d of invoices.docs) {
+      const nom = String(d.get("supplierNom") ?? "");
+      if (!d.get("inboxId") || !d.get("numero") || !(ids.has(d.get("supplierId")) || noms.has(nom.toLowerCase()))) continue;
+      const l = parFournisseur.get(nom) ?? [];
+      if (l.length < 6) l.push(String(d.get("numero")));
+      parFournisseur.set(nom, l);
+    }
+    const res: Record<string, { cherchees: string[]; trouvees: string[] }> = {};
+    for (const [nom, numeros] of parFournisseur) {
+      const x = await chercherDansBoites(numeros, { source: { messageId: "" } });
+      res[nom] = { cherchees: numeros, trouvees: Object.keys(x.trouvees) };
+      total += x.cherchees.length;
+      trouvees += Object.keys(x.trouvees).length;
+    }
+    detail[r.id] = res;
+  }
+  return Response.json({ total, trouvees, ...(cle ? { chiffre: chiffrerPour(cle, detail) } : {}) });
 }
