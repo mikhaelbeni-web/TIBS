@@ -1,9 +1,9 @@
 import { safeEqual } from "@/lib/ingest";
-import { gmailQuery, mergeRules } from "@/lib/mail";
+import { bodyText, emailOf, gmailQuery, header, mergeRules, pdfAttachments } from "@/lib/mail";
 import { RESTAURANTS } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
 import { chiffrerPour } from "@/lib/server/chiffrer";
-import { listMessageIds, refreshAccessToken } from "@/lib/server/google";
+import { getMessage, listMessageIds, refreshAccessToken } from "@/lib/server/google";
 import { syncMail } from "@/lib/server/mailSync";
 import { validerAutomatiquement } from "@/lib/server/autoValider";
 import { isRestaurantId } from "@/lib/restaurants";
@@ -43,6 +43,7 @@ export async function GET(request: Request) {
     const action = q.get("action") ?? "mesure";
     if (action === "rattrapage" || action === "budget") return await rattraper(action, q);
     if (action === "pointer") return await pointer(q);
+    if (action === "releves") return await mesurerReleves(q.get("cle"));
     const cle = q.get("cle");
     const compteurs: Record<string, unknown> = {};
     const detail: Record<string, unknown> = {};
@@ -190,4 +191,46 @@ async function pointer(q: URLSearchParams) {
     remises: { total: r.remises.length, expliquees: r.remises.filter((x) => x.groupes).length },
     tiersSansFiche: r.sansFournisseur.length,
   });
+}
+
+/** Mails qui ressemblent à un relevé / récapitulatif fournisseur (hors Uber et banque). */
+const REQUETE_RELEVES =
+  'after:2026/01/01 -in:sent -in:spam -in:trash -from:me -from:uber.com -from:caisse-epargne.fr ' +
+  '(subject:(relevé OR releve OR récapitulatif OR recapitulatif OR récap OR recap OR "situation de compte" OR "état de compte" OR "etat de compte" OR échéancier OR "relevé de factures" OR "relevé de compte") ' +
+  "OR filename:(releve OR relevé OR recap OR recapitulatif OR situation))";
+
+/**
+ * action=releves&cle=… : relevés fournisseurs déjà rangés (releves) et mails qui y ressemblent dans chaque boîte,
+ * avec ce que le relevé des mails en a fait (mailLog). Détail chiffré seulement ; en clair, des compteurs.
+ */
+async function mesurerReleves(cle: string | null) {
+  const compteurs: Record<string, unknown> = {};
+  const detail: Record<string, unknown> = {};
+  for (const r of RESTAURANTS) {
+    const home = adminDb().doc(`restaurants/${r.id}`);
+    const [releves, gmail] = await Promise.all([home.collection("releves").get(), home.collection("private").doc("gmail").get()]);
+    const mails: Record<string, unknown>[] = [];
+    const refresh = gmail.get("refreshToken") as string | undefined;
+    if (refresh) {
+      const token = await refreshAccessToken(refresh);
+      const ids = await listMessageIds(token, REQUETE_RELEVES, 200);
+      const logs = ids.length ? await adminDb().getAll(...ids.map((id) => home.collection("mailLog").doc(id))) : [];
+      for (const [i, id] of ids.entries()) {
+        const m = await getMessage(token, id).catch(() => null);
+        if (!m) continue;
+        mails.push({
+          id,
+          de: emailOf(header(m, "From")),
+          objet: header(m, "Subject").slice(0, 200),
+          date: header(m, "Date"),
+          pdfs: pdfAttachments(m).map((p) => p.filename),
+          corps: bodyText(m).replace(/\s+/g, " ").slice(0, 1500),
+          log: logs[i]?.exists ? { type: logs[i].get("type"), elements: logs[i].get("elements") } : null,
+        });
+      }
+    }
+    compteurs[r.id] = { releves: releves.size, mailsRessemblants: mails.length, journalises: mails.filter((m) => m.log).length };
+    if (cle) detail[r.id] = { releves: releves.docs.map((d) => ({ id: d.id, ...d.data() })), mails };
+  }
+  return Response.json({ compteurs, ...(cle ? { chiffre: chiffrerPour(cle, detail) } : {}) });
 }
