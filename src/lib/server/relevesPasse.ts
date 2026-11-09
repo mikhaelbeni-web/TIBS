@@ -1,6 +1,6 @@
 import "server-only";
 import { displayNameOf, emailOf, etablissementOf, header, knownSupplier, mergeRules, pdfAttachments } from "@/lib/mail";
-import { derniereReclamation, facturesPourReleve, lignesAReclamer, moisReleve } from "@/lib/reclamation";
+import { derniereReclamation, facturesPourReleve, lignesAReclamer, moisReleve, reprisesPlusRecentes } from "@/lib/reclamation";
 import { normNumero, rapprocher, type Releve } from "@/lib/releves";
 import { RESTAURANT_IDS, type RestaurantId } from "@/lib/restaurants";
 import { adminDb } from "@/lib/server/admin";
@@ -98,12 +98,13 @@ export async function passeReleves(
   ]);
   const factures = invoices.docs.map((d) => ({ id: d.id, ...(d.data() as Invoice) })) as WithId<Invoice>[];
   const enAttente = attente.docs.map((d) => String(d.get("item.numero") ?? "")).filter(Boolean);
+  const reprises = reprisesPlusRecentes(releves.docs.map((d) => ({ id: d.id, ...(d.data() as Releve) })));
   for (const d of releves.docs) {
     const x = d.data() as Releve;
     // Ancien calcul du mois (période d'exercice) : on le corrige.
     const mois = moisReleve(x, x.source?.receivedAt);
     if (mois !== x.mois) await d.ref.update({ mois });
-    const manquantes = lignesAReclamer(rapprocher(x, facturesPourReleve(x, factures), enAttente), x.justifies);
+    const manquantes = lignesAReclamer(rapprocher(x, facturesPourReleve(x, factures), enAttente), x.justifies, reprises.get(d.id));
     if (!manquantes.length) continue;
     if (Date.now() - started > budgetMs) {
       out.incomplet = true;

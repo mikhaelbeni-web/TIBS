@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { construireMail } from "../mime";
-import { brouillonReclamation, derniereReclamation, emailValide, facturesPourReleve, lignesAReclamer, moisReleve } from "../reclamation";
+import { brouillonReclamation, derniereReclamation, emailValide, facturesPourReleve, lignesAReclamer, moisReleve, reprisesPlusRecentes } from "../reclamation";
 import { cleEcart, rapprocher, type Releve } from "../releves";
 
 const rel = (extra: Partial<Releve> = {}): Releve => ({
@@ -74,5 +74,13 @@ describe("réclamation des factures manquantes", () => {
     expect(txt).toContain("In-Reply-To: <id@x>");
     const corps = txt.split("\r\n\r\n")[1].replace(/\r\n/g, "");
     expect(Buffer.from(corps, "base64").toString("utf8")).toBe("Bonjour,\r\nMerci");
+  });
+
+  it("une facture reprise sur un relevé plus récent n'est comptée que sur le plus récent ; montant nul ignoré", () => {
+    const ancien = { id: "a", ...rel({ source: { messageId: "1", receivedAt: "2026-09-01" } }) };
+    const recent = { id: "b", ...rel({ lignes: [{ numero: "FA77543", montantTTC: 83556 }, { numero: "Z9", montantTTC: 0 }], source: { messageId: "2", receivedAt: "2026-10-01" } }) };
+    const rep = reprisesPlusRecentes([ancien, recent]);
+    expect(lignesAReclamer(rapprocher(ancien, []), {}, rep.get("a")).map((l) => l.numero)).toEqual(["FA77415"]);
+    expect(lignesAReclamer(rapprocher(recent, []), {}, rep.get("b")).map((l) => l.numero)).toEqual(["FA77543"]);
   });
 });

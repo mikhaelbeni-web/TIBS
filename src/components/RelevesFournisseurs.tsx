@@ -7,7 +7,7 @@ import { useRestaurant } from "@/components/RestaurantProvider";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Sheet } from "@/components/ui";
 import { emailOf } from "@/lib/mail";
 import { formatEuros } from "@/lib/money";
-import { brouillonReclamation, derniereReclamation, emailValide, facturesPourReleve, lignesAReclamer, nomCle, periodeReleve } from "@/lib/reclamation";
+import { brouillonReclamation, derniereReclamation, emailValide, facturesPourReleve, lignesAReclamer, nomCle, periodeReleve, reprisesPlusRecentes } from "@/lib/reclamation";
 import { normNumero, rapprocher, type Releve, type ReleveLigne } from "@/lib/releves";
 import { isRestaurantId, restaurant, type RestaurantId } from "@/lib/restaurants";
 import type { Invoice, Supplier, WithId } from "@/lib/types";
@@ -57,13 +57,14 @@ export function RelevesFournisseurs({
   const [ouvert, setOuvert] = useState<{ r: ReleveCalcule; mode: Supplier["paiement"] } | null>(null);
 
   const groupes = useMemo(() => {
+    const reprises = reprisesPlusRecentes(releves);
     const calc: ReleveCalcule[] = releves
       .filter((r) => r.lignes.length > 0)
       .map((releve) => {
         const rp = rapprocher(releve, facturesPourReleve(releve, factures), enAttente);
         return {
           releve,
-          manquantes: lignesAReclamer(rp, releve.justifies).map((l) => etatLigne(releve, l)),
+          manquantes: lignesAReclamer(rp, releve.justifies, reprises.get(releve.id)).map((l) => etatLigne(releve, l)),
           recues: rp.lignes.filter((l) => l.etat !== "non_recue").length,
           date: (releve.source.receivedAt ?? releve.dateReleve ?? `${releve.mois}-01`).slice(0, 10),
         };
