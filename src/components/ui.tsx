@@ -75,7 +75,7 @@ export function ErrorBox({ message }: { message: string | null }) {
 }
 
 /** Feuille qui monte du bas sur téléphone, fenêtre centrée sur grand écran. */
-export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+export function Sheet({ open, onClose, title, children, large }: { open: boolean; onClose: () => void; title: string; children: ReactNode; large?: boolean }) {
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -95,7 +95,7 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="flex max-h-[92dvh] w-full flex-col rounded-t-[20px] bg-surface shadow-sheet sm:max-w-lg sm:rounded-[20px]"
+        className={`flex max-h-[92dvh] w-full flex-col rounded-t-[20px] bg-surface shadow-sheet sm:rounded-[20px] ${large ? "sm:max-w-3xl" : "sm:max-w-lg"}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-3">

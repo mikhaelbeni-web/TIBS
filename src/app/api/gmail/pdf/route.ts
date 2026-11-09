@@ -4,12 +4,14 @@ import { getAttachment, getMessage, GoogleAuthError } from "@/lib/server/google"
 import { jetonBoite } from "@/lib/server/mailSync";
 import { restaurant } from "@/lib/restaurants";
 import { pdfAttachments } from "@/lib/mail";
-import type { InboxItem, InboxSource } from "@/lib/ingest";
+import type { InboxDoc, InboxItem, InboxSource } from "@/lib/ingest";
+import { inboxDeLaFacture } from "@/lib/factureSource";
 
 const err = (status: number, error: string) => Response.json({ error }, { status });
 
 /**
  * POST /api/gmail/pdf?r=19e&i=<id inbox> (gérant) : renvoie le PDF joint au mail d'un élément « À vérifier ».
+ * POST /api/gmail/pdf?r=19e&f=<id facture> : PDF du mail d'où vient une facture validée (page Factures).
  * On ne prend que des éléments déjà dans la boîte du restaurant : pas d'accès à un mail arbitraire.
  */
 export async function POST(request: Request) {
@@ -18,11 +20,30 @@ export async function POST(request: Request) {
   const rid = restaurantParam(request);
   if (rid instanceof Response) return rid;
   const params = new URL(request.url).searchParams;
-  const id = params.get("i") ?? "";
   const releve = params.get("c") === "releve";
-  if (!/^[A-Za-z0-9_-]{1,140}$/.test(id)) return err(400, "Élément inconnu.");
-
+  const factureId = params.get("f");
+  const valide = (x: string) => /^[A-Za-z0-9_-]{1,150}$/.test(x);
   const home = adminDb().doc(`restaurants/${rid}`);
+  let id = params.get("i") ?? "";
+  if (factureId !== null) {
+    if (!valide(factureId)) return err(400, "Facture inconnue.");
+    const inv = await home.collection("invoices").doc(factureId).get();
+    if (!inv.exists) return err(404, "Facture introuvable.");
+    id = (inv.get("inboxId") as string | undefined) ?? "";
+    const numero = String(inv.get("numero") ?? "").trim();
+    if (!id && numero) {
+      // Factures validées à la main avant l'enregistrement de l'id du mail : retrouvées par leur numéro.
+      const q = await home.collection("inbox").where("item.numero", "==", numero).limit(10).get();
+      id =
+        inboxDeLaFacture(
+          { numero, montantTTC: Number(inv.get("montantTTC")), supplierNom: String(inv.get("supplierNom") ?? "") },
+          q.docs.map((d) => ({ id: d.id, data: d.data() as InboxDoc })),
+        ) ?? "";
+    }
+    if (!id) return err(404, "Pas de PDF pour cette facture : elle a été saisie à la main, pas reçue par mail.");
+  }
+  if (!valide(id)) return err(400, "Élément inconnu.");
+
   const snap = await home.collection(releve ? "releves" : "inbox").doc(id).get();
   const source = (releve ? snap.get("source") : (snap.get("item") as InboxItem | undefined)?.source) as InboxSource | undefined;
   const messageId = source?.messageId;

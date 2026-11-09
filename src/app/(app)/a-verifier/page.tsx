@@ -326,6 +326,7 @@ function ReviewSheet({ id, d, mailbox, onClose }: { id: string; d: InboxDoc; mai
           montantTTC: ttc,
           statut: "a_payer",
           note: `Reçue par mail${d.item.source.from ? ` de ${d.item.source.from}` : ""}`.slice(0, 300),
+          inboxId: id, // pour afficher et télécharger le PDF depuis la page Factures
           createdAt: now,
         });
       } else {

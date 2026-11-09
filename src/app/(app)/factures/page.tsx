@@ -2,7 +2,7 @@
 
 import { addDoc, collection, deleteDoc, doc, updateDoc, writeBatch } from "firebase/firestore";
 import Link from "next/link";
-import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Sheet } from "@/components/ui";
 import { useRestaurant } from "@/components/RestaurantProvider";
 import { db } from "@/lib/firebase";
@@ -16,6 +16,7 @@ import type { InboxDoc } from "@/lib/ingest";
 import type { Releve } from "@/lib/releves";
 import type { ReactNode } from "react";
 import { useCollection } from "@/lib/useCollection";
+import { nomFichier, PdfPages, usePdf } from "@/components/PdfApercu";
 
 const fr = (iso?: string) => (iso ? iso.split("-").reverse().join("/") : "");
 const thisMonth = () => new Date().toISOString().slice(0, 7);
@@ -221,8 +222,12 @@ export default function FacturesPage() {
       <Sheet open={fournisseur !== null} onClose={closeFournisseur} title="Fournisseur">
         {fournisseur && <SupplierForm initial={fournisseur} onDone={closeFournisseur} />}
       </Sheet>
-      <Sheet open={editing !== null} onClose={close} title={editing === "new" ? "Nouvelle facture" : "Modifier la facture"}>
-        {editing !== null && <InvoiceForm initial={editing === "new" ? null : editing} suppliers={suppliers.items} onDone={close} />}
+      <Sheet open={editing !== null} onClose={close} title={editing === "new" ? "Nouvelle facture" : "Facture"} large={editing !== null && editing !== "new"}>
+        {editing === "new" ? (
+          <InvoiceForm initial={null} suppliers={suppliers.items} onDone={close} />
+        ) : (
+          editing !== null && <FactureVue key={editing.id} facture={editing} suppliers={suppliers.items} onDone={close} />
+        )}
       </Sheet>
     </div>
   );
@@ -398,6 +403,48 @@ function GroupeCard({
         )}
       </div>
     </Card>
+  );
+}
+
+/** Fiche d'une facture : le PDF reçu par mail (affiché en images, téléchargeable), puis la modification. */
+function FactureVue({ facture, suppliers, onDone }: { facture: WithId<Invoice>; suppliers: WithId<Supplier>[]; onDone: () => void }) {
+  const pdf = usePdf(`f=${encodeURIComponent(facture.id)}`);
+  const { charger } = pdf;
+  const [modifier, setModifier] = useState(false);
+  useEffect(() => {
+    void charger();
+  }, [charger]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-semibold">{facture.supplierNom}</span>
+            <Badge tone={STATUT[facture.statut].tone}>{STATUT[facture.statut].label}</Badge>
+          </div>
+          <div className="text-sm text-muted">
+            N° {facture.numero || "—"} · {fr(facture.dateFacture)}
+            {facture.dateEcheance ? ` · échéance ${fr(facture.dateEcheance)}` : ""}
+          </div>
+        </div>
+        <span className="shrink-0 text-lg font-semibold tabular-nums">{formatEuros(facture.montantTTC)}</span>
+      </div>
+
+      {pdf.busy && <p className="rounded-control bg-surface-2 p-6 text-center text-sm text-muted">Chargement de la facture…</p>}
+      {pdf.error && <p className="rounded-control bg-surface-2 p-4 text-sm text-muted">{pdf.error}</p>}
+      {pdf.data && <PdfPages data={pdf.data} fichier={nomFichier(facture.supplierNom, facture.numero, facture.dateFacture)} hauteur="max-h-[60dvh]" />}
+
+      {modifier ? (
+        <div className="border-t border-border pt-4">
+          <InvoiceForm initial={facture} suppliers={suppliers} onDone={onDone} />
+        </div>
+      ) : (
+        <Button variant="secondary" className="w-full" onClick={() => setModifier(true)}>
+          Modifier la facture
+        </Button>
+      )}
+    </div>
   );
 }
 
