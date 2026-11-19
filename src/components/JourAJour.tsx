@@ -11,7 +11,7 @@ import { db } from "@/lib/firebase";
 import { formatEuros } from "@/lib/money";
 import { moisCle } from "@/lib/reglages";
 import type { BankLine, CashLine } from "@/lib/reconcile";
-import { comparerCB, comparerUber, comparerUberBanque, comparerUberJour, pire, controleTotal, type Statut, type TicketZ } from "@/lib/ticketZ";
+import { comparerCB, comparerUber, comparerUberBanque, comparerUberJour, pire, controleTotal, tropPercuSuspect, type Statut, type TicketZ } from "@/lib/ticketZ";
 import type { BankTransaction, CashEntry, UberJourDoc, UberPayout, WithId } from "@/lib/types";
 
 const fr = (iso: string) => iso.split("-").reverse().join("/");
@@ -293,6 +293,9 @@ export function JourAJour({
                   ) : (
                     <p className="text-xs text-danger">Écart de {formatEuros(total.ecart ?? 0)} entre les paiements lus et le total imprimé : un montant a peut-être été mal lu, compare avec le ticket.</p>
                   ))}
+                {ticket && tropPercuSuspect(ticket).raisons.length > 0 && (
+                  <p className="mt-2 text-xs text-danger">Trop perçu à vérifier : {tropPercuSuspect(ticket).raisons.join(", ")}. Il pourrait cacher un écart de caisse.</p>
+                )}
                 {total.horsTotal.map((h, i) => (
                   <div key={i} className="mt-2">
                     <Ligne label="Trop perçu (hors total)">{formatEuros(h.montant)}</Ligne>
