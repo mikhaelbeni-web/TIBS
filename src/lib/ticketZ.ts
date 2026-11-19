@@ -7,7 +7,11 @@ import { reconcile, type BankLine, type CashLine } from "./reconcile";
  * correspond à la journée de service du 04/11.
  */
 
-export type Categorie = "cb" | "especes" | "uber" | "ticketsResto" | "autres";
+/**
+ * tropPercu : ligne « trop perçu » du Z = argent reçu en plus de l'addition (ex. titre-restaurant plus élevé
+ * que la note, sans rendu de monnaie). Ce n'est pas une vente : L'Addition ne la compte pas dans le total imprimé.
+ */
+export type Categorie = "cb" | "especes" | "uber" | "ticketsResto" | "autres" | "tropPercu";
 
 export interface LignePaiement {
   libelle: string;
@@ -51,6 +55,7 @@ const norm = (s: string) =>
 /** Range un moyen de paiement du Z dans une catégorie de rapprochement. */
 export function categorie(libelle: string): Categorie {
   const s = norm(libelle);
+  if (/trop[\s-]*percu/.test(s)) return "tropPercu";
   if (/uber/.test(s)) return "uber";
   if (/esp|cash|liquide/.test(s)) return "especes";
   if (/ticket|titre|swile|edenred|sodexo|pluxee|up dej|cheque dej|chq dej|apetiz|bimpli|resto|\btr\b/.test(s)) return "ticketsResto";
@@ -66,15 +71,18 @@ export interface Totaux {
   uber: number;
   ticketsResto: number;
   autres: number;
+  /** Trop perçu : hors ventes, donc hors somme. */
+  tropPercu: number;
+  /** Somme des moyens de paiement qui font le total imprimé (sans le trop perçu). */
   somme: number;
 }
 
 export function totaux(paiements: LignePaiement[]): Totaux {
-  const t: Totaux = { uberCommandes: 0, cb: 0, especes: 0, uber: 0, ticketsResto: 0, autres: 0, somme: 0 };
+  const t: Totaux = { uberCommandes: 0, cb: 0, especes: 0, uber: 0, ticketsResto: 0, autres: 0, tropPercu: 0, somme: 0 };
   for (const p of paiements) {
     t[p.categorie] += p.montant;
     if (p.categorie === "uber") t.uberCommandes += p.nombre ?? 0;
-    t.somme += p.montant;
+    if (p.categorie !== "tropPercu") t.somme += p.montant;
   }
   return t;
 }
@@ -576,12 +584,31 @@ export function pire(...s: Statut[]): Statut {
   return "absent";
 }
 
-/** Le total imprimé correspond-il à la somme des moyens de paiement ? */
-export function controleTotal(t: TicketZ): { statut: Statut; somme: number; total?: number; ecart?: number } {
-  const somme = totaux(t.paiements).somme;
-  if (t.total === undefined) return { statut: "absent", somme };
+export interface ControleTotal {
+  statut: Statut;
+  /** Somme des moyens de paiement, sans le trop perçu. */
+  somme: number;
+  total?: number;
+  ecart?: number;
+  /** Lignes « trop perçu », montrées à part : hors ventes, hors total imprimé. */
+  horsTotal: LignePaiement[];
+  /** Écart égal au centime à une seule ligne : c'est elle qui n'est pas dans le total (lecture juste). */
+  ligneEnTrop?: LignePaiement;
+}
+
+/**
+ * Le total imprimé correspond-il à la somme des moyens de paiement ?
+ * La catégorie est recalculée depuis le libellé : les Z déjà enregistrés ont « trop perçu » rangé en « autres ».
+ */
+export function controleTotal(t: TicketZ): ControleTotal {
+  const paiements = t.paiements.map((p) => ({ ...p, categorie: categorie(p.libelle) === "tropPercu" ? ("tropPercu" as const) : p.categorie }));
+  const horsTotal = paiements.filter((p) => p.categorie === "tropPercu");
+  const somme = totaux(paiements).somme;
+  if (t.total === undefined) return { statut: "absent", somme, horsTotal };
   const ecart = somme - t.total;
-  return { statut: Math.abs(ecart) <= 1 ? "ok" : "ecart", somme, total: t.total, ecart };
+  if (Math.abs(ecart) <= 1) return { statut: "ok", somme, total: t.total, ecart, horsTotal };
+  const egales = paiements.filter((p) => p.categorie !== "tropPercu" && p.montant !== 0 && Math.abs(p.montant - ecart) <= 1);
+  return { statut: "ecart", somme, total: t.total, ecart, horsTotal, ...(egales.length === 1 ? { ligneEnTrop: egales[0] } : {}) };
 }
 
 /** Ventes Uber Eats d'une journée, d'après le Manager Uber Eats (uberJours/{AAAA-MM-JJ}). */

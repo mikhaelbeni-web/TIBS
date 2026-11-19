@@ -48,6 +48,31 @@ describe("ticket Z", () => {
     expect(controleTotal({ dateTicket: "2026-11-05", paiements, total: 270100 })).toMatchObject({ statut: "ecart", ecart: -10000 });
   });
 
+  it("trop perçu : lu mais hors total (Z du 17/11/2026)", () => {
+    expect(categorie("trop perçu")).toBe("tropPercu");
+    expect(categorie("Trop Percu")).toBe("tropPercu");
+    // Z déjà enregistré : « trop perçu » rangé en « autres » à la lecture.
+    const paiements = [
+      { libelle: "CB", montant: 503470, categorie: "cb" as const, nombre: 91 },
+      { libelle: "trop perçu", montant: 4400, categorie: "autres" as const },
+      { libelle: "Cash", montant: 76150, categorie: "especes" as const, nombre: 37 },
+      { libelle: "UBER", montant: 116250, categorie: "uber" as const, nombre: 29 },
+    ];
+    const r = controleTotal({ dateTicket: "2026-11-18", heureCloture: "00:53", paiements, total: 695870 });
+    expect(r).toMatchObject({ statut: "ok", somme: 695870, horsTotal: [{ libelle: "trop perçu", montant: 4400 }] });
+    const t = totaux(paiements.map((p) => ({ ...p, categorie: categorie(p.libelle) })));
+    expect(t).toMatchObject({ autres: 0, tropPercu: 4400, somme: 695870, cb: 503470 });
+  });
+
+  it("écart égal à une seule ligne : la ligne est nommée", () => {
+    const paiements = [
+      { libelle: "CB", montant: 100000, categorie: "cb" as const },
+      { libelle: "Pourboire", montant: 1234, categorie: "autres" as const },
+    ];
+    expect(controleTotal({ dateTicket: "2026-11-05", paiements, total: 100000 })).toMatchObject({ statut: "ecart", ecart: 1234, ligneEnTrop: { libelle: "Pourboire" } });
+    expect(controleTotal({ dateTicket: "2026-11-05", paiements, total: 99000 }).ligneEnTrop).toBeUndefined();
+  });
+
   it("CB : remise J+1 avec commission", () => {
     const r = comparerCB(
       "2026-11-04",

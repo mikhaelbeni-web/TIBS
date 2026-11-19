@@ -12,7 +12,7 @@ on:
         required: true
         default: ""
       action:
-        description: "controle (CB caisse ↔ banque), controle-detail (détail dans le journal Vercel, privé), releve-controle (relevé bancaire d'abord), incoherences (recalcule la liste de l'accueil) ou rattrapage (L'Addition)"
+        description: "controle (CB caisse ↔ banque), controle-detail (détail dans le journal Vercel, privé), releve-controle (relevé bancaire d'abord), incoherences (recalcule la liste de l'accueil), total-z (total imprimé des Z, trop perçu), total-z-corriger (idem + corrige les Z enregistrés) ou rattrapage (L'Addition)"
         required: true
         default: controle
         type: choice
@@ -21,6 +21,8 @@ on:
           - controle-detail
           - releve-controle
           - incoherences
+          - total-z
+          - total-z-corriger
           - rattrapage
 
 jobs:
@@ -42,7 +44,7 @@ jobs:
           done
 
   controle:
-    if: inputs.action == 'controle' || inputs.action == 'controle-detail' || inputs.action == 'releve-controle' || inputs.action == 'incoherences'
+    if: inputs.action == 'controle' || inputs.action == 'controle-detail' || inputs.action == 'releve-controle' || inputs.action == 'incoherences' || inputs.action == 'total-z' || inputs.action == 'total-z-corriger'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -52,9 +54,11 @@ jobs:
           MOIS: ${{ inputs.mois }}
           RELEVE: ${{ inputs.action == 'releve-controle' && '1' || '0' }}
           DETAIL: ${{ inputs.action == 'controle-detail' && '1' || '0' }}
-          INCOHERENCES: ${{ inputs.action == 'incoherences' && '1' || '0' }}
+          INCOHERENCES: ${{ (inputs.action == 'incoherences' || inputs.action == 'total-z-corriger') && '1' || '0' }}
+          TOTALZ: ${{ (inputs.action == 'total-z' || inputs.action == 'total-z-corriger') && '1' || '0' }}
+          CORRIGER: ${{ inputs.action == 'total-z-corriger' && '1' || '0' }}
         run: |
           if ! [[ "$MOIS" =~ ^[0-9]{4}-[0-9]{2}(,[0-9]{4}-[0-9]{2})*$ ]]; then echo "mois attendus : AAAA-MM[,AAAA-MM]"; exit 1; fi
-          code=$(curl -sS -o out.json -w "%{http_code}" --max-time 320 -H "Authorization: Bearer $CRON_SECRET" "https://tibs.vercel.app/api/cron/controle-cb?mois=$MOIS&releve=$RELEVE&detail=$DETAIL&incoherences=$INCOHERENCES")
+          code=$(curl -sS -o out.json -w "%{http_code}" --max-time 320 -H "Authorization: Bearer $CRON_SECRET" "https://tibs.vercel.app/api/cron/controle-cb?mois=$MOIS&releve=$RELEVE&detail=$DETAIL&incoherences=$INCOHERENCES&totalz=$TOTALZ&corriger=$CORRIGER")
           echo "HTTP $code"; cat out.json; echo
           test "$code" = "200"

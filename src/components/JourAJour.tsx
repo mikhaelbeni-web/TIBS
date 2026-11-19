@@ -23,7 +23,7 @@ const lendemain = (iso: string) => new Date(Date.parse(`${iso}T00:00:00Z`) + 864
 const TONS: Record<Statut, "green" | "red" | "orange" | "neutral"> = { ok: "green", proche: "orange", ecart: "red", attente: "orange", absent: "neutral" };
 const MOTS: Record<Statut, string> = { ok: "OK", proche: "À vérifier", ecart: "Écart", attente: "En attente", absent: "Pas de données" };
 
-const CATS: Record<string, string> = { cb: "CB", especes: "Espèces", uber: "Uber", ticketsResto: "Titres resto", autres: "Autre" };
+const CATS: Record<string, string> = { cb: "CB", especes: "Espèces", uber: "Uber", ticketsResto: "Titres resto", autres: "Autre", tropPercu: "Trop perçu" };
 
 /** Réduit une photo de ticket (souvent 4–8 Mo) avant l'envoi : 2000 px de haut suffisent pour lire les montants. */
 async function enBase64(f: File): Promise<{ base64: string; mediaType: string }> {
@@ -269,7 +269,7 @@ export function JourAJour({
                 {entry.ticketZ.heureCloture ? `, clôture à ${entry.ticketZ.heureCloture}` : ""}
               </p>
             )}
-            {(ticket?.paiements ?? []).map((p, i) => (
+            {(ticket?.paiements ?? []).filter((p) => !total?.horsTotal.some((h) => h.libelle === p.libelle && h.montant === p.montant)).map((p, i) => (
               <Ligne key={i} label={`${p.libelle}${p.nombre !== undefined ? ` ×${p.nombre}` : ""} · ${CATS[p.categorie] ?? p.categorie}`}>
                 {formatEuros(p.montant)}
               </Ligne>
@@ -285,7 +285,20 @@ export function JourAJour({
               <div className="mt-2 border-t border-border pt-2">
                 <Ligne label="Somme des paiements">{formatEuros(total.somme)}</Ligne>
                 {total.total !== undefined && <Ligne label="Total imprimé">{formatEuros(total.total)}</Ligne>}
-                {total.statut === "ecart" && <p className="text-xs text-danger">Écart de {formatEuros(total.ecart ?? 0)} : une ligne a peut-être été mal lue, vérifie le ticket.</p>}
+                {total.statut === "ecart" &&
+                  (total.ligneEnTrop ? (
+                    <p className="text-xs text-danger">
+                      Écart de {formatEuros(total.ecart ?? 0)} : c&apos;est exactement la ligne « {total.ligneEnTrop.libelle} ». Le ticket est bien lu, mais L&apos;Addition ne compte pas cette ligne dans son total.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-danger">Écart de {formatEuros(total.ecart ?? 0)} entre les paiements lus et le total imprimé : un montant a peut-être été mal lu, compare avec le ticket.</p>
+                  ))}
+                {total.horsTotal.map((h, i) => (
+                  <div key={i} className="mt-2">
+                    <Ligne label="Trop perçu (hors total)">{formatEuros(h.montant)}</Ligne>
+                    <p className="text-xs text-muted">Payé en plus de l&apos;addition, sans rendu de monnaie (souvent un titre-restaurant plus élevé que la note). Ce n&apos;est pas une vente : L&apos;Addition ne le compte pas dans le total, l&apos;app non plus.</p>
+                  </div>
+                ))}
               </div>
             )}
           </Bloc>

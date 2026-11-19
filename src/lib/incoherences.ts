@@ -211,7 +211,7 @@ export function listerIncoherences(d: DonneesIncoherences): BilanIncoherences {
         date: c.date,
         jour: c.date,
         titre: "Ticket Z : total ≠ somme des paiements",
-        detail: `Journée du ${fr(c.date)} : paiements ${formatEuros(r.somme)}, total imprimé ${formatEuros(r.total ?? 0)} (${signe(r.ecart)}).`,
+        detail: `Journée du ${fr(c.date)} : paiements ${formatEuros(r.somme)}, total imprimé ${formatEuros(r.total ?? 0)} (${signe(r.ecart)}).${r.ligneEnTrop ? ` C'est exactement la ligne « ${r.ligneEnTrop.libelle} » : bien lue, mais pas comptée dans le total par L'Addition.` : ""}`,
         ecart: r.ecart,
       });
     }
