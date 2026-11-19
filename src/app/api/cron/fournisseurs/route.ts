@@ -11,6 +11,7 @@ import { docMois, majReleveJustifie, type MoisReleve } from "@/lib/server/releve
 import { isRestaurantId } from "@/lib/restaurants";
 import { FieldValue } from "firebase-admin/firestore";
 import { rapprocher } from "@/lib/rapprochementFournisseurs";
+import { categorie, controleTotal, type LignePaiement } from "@/lib/ticketZ";
 import type { BankTransaction, Invoice, Supplier, WithId } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -36,6 +37,8 @@ const finMois = (m: string) => {
  * « Banque depuis janvier »). Compteurs seulement en clair.
  * action=releve[&cle=…] : recalcule le relevé de compte justifié ligne par ligne (deux restaurants) ; en clair, le
  * nombre de lignes par statut et par nature ; chiffré, les lignes non justifiées / à regarder (libellé, montant, texte).
+ * action=total-z[&cle=…] : Z dont le total imprimé ≠ somme des paiements (règle actuelle) ; en clair des compteurs,
+ * chiffré les lignes de paiement de ces Z et les libellés « autres » / « trop perçu ».
  */
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -50,6 +53,7 @@ export async function GET(request: Request) {
     if (action === "releves") return await mesurerReleves(q.get("cle"));
     if (action === "calibrage") return await calibrer(q.get("cle"));
     if (action === "releve") return await releveCompte(q.get("cle"));
+    if (action === "total-z") return await totalZ(q.get("cle"));
     if (action === "releves-passe") {
       const res: Record<string, unknown> = {};
       for (const r of RESTAURANTS) res[r.id] = await passeReleves(r.id, { budgetMs: 130_000, force: true, maxLectures: 25 }).catch((e) => ({ erreur: (e as Error).message.slice(0, 200) }));
@@ -304,6 +308,30 @@ async function releveCompte(cle: string | null) {
       detail[r.id] = mois.flatMap((m) =>
         m.lignes.filter((l) => l.statut !== "justifie").map((l) => ({ d: l.date, l: l.libelle, m: l.montant, n: l.nature, s: l.statut, t: l.texte })),
       );
+  }
+  return Response.json({ compteurs, ...(cle ? { chiffre: chiffrerPour(cle, detail) } : {}) });
+}
+
+async function totalZ(cle: string | null) {
+  const compteurs: Record<string, unknown> = {};
+  const detail: Record<string, unknown> = {};
+  for (const r of RESTAURANTS) {
+    const docs = await adminDb().collection(`restaurants/${r.id}/cashEntries`).where("source", "==", "ticketZ").get();
+    const ecarts: unknown[] = [];
+    const libelles: Record<string, number> = {};
+    let zLus = 0;
+    for (const d of docs.docs) {
+      const paiements = d.get("paiements") as LignePaiement[] | undefined;
+      const total = d.get("total") as number | undefined;
+      if (!Array.isArray(paiements) || !paiements.length) continue;
+      zLus++;
+      for (const p of paiements) if (!["cb", "especes", "uber"].includes(categorie(p.libelle))) libelles[p.libelle] = (libelles[p.libelle] ?? 0) + 1;
+      if (total === undefined) continue;
+      const c = controleTotal({ dateTicket: d.get("date"), paiements, total });
+      if (c.statut === "ecart") ecarts.push({ date: d.get("date"), total, somme: c.somme, ecart: c.ecart, ttc: [d.get("ttc55"), d.get("ttc10"), d.get("ttc20")], lignes: paiements.map((p) => [p.libelle, p.montant, p.nombre ?? null]) });
+    }
+    compteurs[r.id] = { zLus, ecarts: ecarts.length };
+    detail[r.id] = { ecarts, libelles };
   }
   return Response.json({ compteurs, ...(cle ? { chiffre: chiffrerPour(cle, detail) } : {}) });
 }
