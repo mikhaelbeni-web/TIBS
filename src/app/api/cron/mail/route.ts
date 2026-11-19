@@ -8,6 +8,7 @@ import { releveBanqueDu } from "@/lib/banque";
 import { syncBanque, type BanqueSyncResult } from "@/lib/server/banqueSync";
 import { majIncoherencesSiBesoin } from "@/lib/server/incoherences";
 import { passeReleves } from "@/lib/server/relevesPasse";
+import { majReleveSiBesoin } from "@/lib/server/releveJustifie";
 
 export const maxDuration = 300;
 
@@ -69,6 +70,14 @@ export async function GET(request: Request) {
     const n = await majIncoherencesSiBesoin(r.id, b?.status === "ok" && b.nouvelles > 0);
     if (n) incoherences[r.id] = n;
   }
+  // Relevé de compte justifié ligne par ligne : après un relevé bancaire avec des opérations nouvelles, sinon une fois par jour.
+  const releveCompte: Record<string, unknown> = {};
+  for (const r of RESTAURANTS) {
+    if (285_000 - (Date.now() - started) < 40_000) break;
+    const b = banque[r.id];
+    const n = await majReleveSiBesoin(r.id, b?.status === "ok" && b.nouvelles > 0);
+    if (n) releveCompte[r.id] = n;
+  }
   // Relevés fournisseurs (une fois par jour et par restaurant) : repérage + factures manquantes. Compteurs seulement.
   const releves: Record<string, unknown> = {};
   for (const r of RESTAURANTS) {
@@ -78,5 +87,5 @@ export async function GET(request: Request) {
     if (p) releves[r.id] = p;
   }
   const erreur = Object.values(out).some((x) => x.status === "erreur");
-  return Response.json({ ...out, relu, banque, auto, contre, incoherences, releves }, { status: erreur ? 502 : 200 });
+  return Response.json({ ...out, relu, banque, auto, contre, incoherences, releveCompte, releves }, { status: erreur ? 502 : 200 });
 }
