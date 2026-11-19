@@ -1,5 +1,5 @@
 import { bilanCB, type BilanMoisCB } from "@/lib/controleCB";
-import { comparerCB, lotDuMatinPossible } from "@/lib/ticketZ";
+import { categorie, comparerCB, controleTotal, lotDuMatinPossible, totaux, type LignePaiement } from "@/lib/ticketZ";
 import { safeEqual } from "@/lib/ingest";
 import { estMois } from "@/lib/laddition";
 import { moisCle } from "@/lib/reglages";
@@ -17,6 +17,9 @@ const decale = (iso: string, n: number) => new Date(Date.parse(`${iso}T00:00:00Z
  * workflow « Rattrapage et contrôle CB ». Rapproche chaque journée du mois (CB du Z contre remises CB) et ne renvoie
  * que des compteurs : le journal du workflow est public, aucun montant ni libellé n'en sort.
  * &detail=1 : détail de chaque crédit dans le journal Vercel (privé), jamais dans la réponse.
+ * &totalz=1 : contrôle « total imprimé = somme des paiements » de chaque Z, ancienne règle contre nouvelle (trop perçu
+ *   hors total) ; compteurs dans la réponse, libellés « autres » et dates dans le journal Vercel (privé).
+ *   &corriger=1 : réécrit catégories et « autres » des Z déjà enregistrés d'après la règle actuelle.
  * &releve=1 : relève d'abord la banque (lecture seule) sans attendre l'intervalle de 8 h, pour les restaurants reliés.
  */
 export async function GET(request: Request) {
@@ -97,6 +100,50 @@ async function controler(request: Request) {
       }
     }
   }
+  const totalz: Record<string, unknown> = {};
+  if (q.get("totalz") === "1") {
+    for (const r of RESTAURANTS) {
+      if (seul && r.id !== seul) continue;
+      const docs = await adminDb()
+        .collection(`restaurants/${r.id}/cashEntries`)
+        .where("date", ">=", `${mois[0]}-01`)
+        .where("date", "<=", `${mois[mois.length - 1]}-31`)
+        .get();
+      const b = { zLus: 0, avantEcart: 0, apresEcart: 0, apresOk: 0, sansTotal: 0, ligneEnTrop: 0, tropPercu: 0, corriges: 0 };
+      const libellesAutres: Record<string, number> = {};
+      const ecarts: string[] = [];
+      for (const d of docs.docs) {
+        const paiements = d.get("paiements") as LignePaiement[] | undefined;
+        if (!Array.isArray(paiements) || !paiements.length) continue;
+        b.zLus++;
+        const total = d.get("total") as number | undefined;
+        const date = d.get("date") as string;
+        for (const p of paiements) if (p.categorie === "autres" || categorie(p.libelle) === "tropPercu") libellesAutres[p.libelle] = (libellesAutres[p.libelle] ?? 0) + 1;
+        if (total === undefined) b.sansTotal++;
+        else {
+          const avant = paiements.reduce((x, p) => x + p.montant, 0);
+          if (Math.abs(avant - total) > 1) b.avantEcart++;
+          const c = controleTotal({ dateTicket: date, paiements, total });
+          if (c.horsTotal.length) b.tropPercu++;
+          if (c.statut === "ok") b.apresOk++;
+          else {
+            b.apresEcart++;
+            if (c.ligneEnTrop) b.ligneEnTrop++;
+            ecarts.push(date);
+            console.log("controle-cb totalz", r.id, JSON.stringify({ date, somme: c.somme, total, ecart: c.ecart, lignes: paiements.map((p) => [p.libelle, p.montant, p.categorie]) }));
+          }
+        }
+        const nouveaux = paiements.map((p) => ({ ...p, categorie: categorie(p.libelle) }));
+        if (q.get("corriger") === "1" && nouveaux.some((p, i) => p.categorie !== paiements[i].categorie)) {
+          const t = totaux(nouveaux);
+          await d.ref.update({ paiements: nouveaux, cb: t.cb, especes: t.especes, ticketsResto: t.ticketsResto, autres: t.autres, uber: t.uber });
+          b.corriges++;
+        }
+      }
+      console.log("controle-cb totalz", r.id, JSON.stringify({ libellesAutres, ecarts }));
+      totalz[r.id] = { ...b, ecarts };
+    }
+  }
   // &incoherences=1 : recalcule la liste de l'accueil ; seulement des compteurs par type dans la réponse publique.
   const incoherences: Record<string, unknown> = {};
   if (q.get("incoherences") === "1") {
@@ -114,7 +161,7 @@ async function controler(request: Request) {
   }
   // Sérialisé ici pour que toute erreur passe par le message ci-dessus.
   return new Response(
-    JSON.stringify({ ...(Object.keys(releve).length ? { releve } : {}), ...(Object.keys(incoherences).length ? { incoherences } : {}), ...out }),
+    JSON.stringify({ ...(Object.keys(totalz).length ? { totalz } : {}), ...(Object.keys(releve).length ? { releve } : {}), ...(Object.keys(incoherences).length ? { incoherences } : {}), ...out }),
     { headers: { "content-type": "application/json" } },
   );
 }
