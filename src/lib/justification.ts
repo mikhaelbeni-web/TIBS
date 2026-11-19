@@ -97,7 +97,9 @@ const ajoutMois = (mois: string, n: number) => {
   const [y, m] = mois.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 7);
 };
-const pluriel = (n: number, mot: string) => `${n} ${mot}${n > 1 ? "s" : ""}`;
+const pluriel = (n: number, mot: string) => `${n} ${mot}${n > 1 && !mot.endsWith("s") ? "s" : ""}`;
+/** Écart CB (centimes) qui n'est qu'un arrondi. */
+const TOLERANCE_ARRONDI = 500;
 
 const EMETTEURS: [RegExp, string][] = [
   [/EDENRED|TICKET\s*REST/i, "Edenred"],
@@ -144,48 +146,13 @@ export function justifierReleve(d: DonneesReleve): ReleveJustifie {
   const premierJourCaisse = cbCaisse.reduce((m, c) => (c.amount > 0 && c.date < m ? c.date : m), "9999-12-31");
   const options = { maxDays: 5, maxFeeRate: 0.03, today, lignes: bankLines };
   const vus = new Set<string>();
+  const tous: ComparaisonCB[] = [];
   for (let mois = debutBanque.slice(0, 7); mois <= today.slice(0, 7); mois = ajoutMois(mois, 1)) {
     const p = pointageMoisCB(mois, cbCaisse, credits, options);
     for (const g of p.groupes) {
       if (!g.banque || !g.remises?.length || vus.has(g.banque.date)) continue;
       vus.add(g.banque.date);
-      const cle = g.banque.date;
-      const ecart = g.ecart ?? g.banque.montant - g.caisse;
-      groupesCB[cle] = {
-        credit: cle,
-        remises: g.remises.length,
-        banque: g.banque.montant,
-        caisse: g.caisse,
-        ecart,
-        ...(g.titres ? { titres: g.titres } : {}),
-        jours: (g.joursCouverts ?? []).map((j) => ({ date: j.date, montant: j.amount })),
-      };
-      const statut = statutCB(g, cle, finBanque, today);
-      const jours = (g.joursCouverts ?? []).map((j) => fr(j.date));
-      const journees = jours.length > 1 ? `journées du ${jours.join(", ")}` : `journée du ${jours[0] ?? "?"}`;
-      const explication =
-        statut === "justifie"
-          ? g.titres
-            ? `écart de ${formatEuros(ecart)} = tickets-resto passés « CB » en caisse, payés à part par les émetteurs`
-            : g.voisin || g.remiseExacte
-              ? "un lot de remises est passé sur le crédit voisin, les deux écarts se compensent"
-              : Math.abs(ecart) <= 100
-                ? "à 1 € près"
-                : `écart de ${formatEuros(ecart)}`
-          : statut === "attente"
-            ? "le reste des remises peut encore arriver"
-            : `écart de ${formatEuros(ecart)} non expliqué`;
-      g.remises.forEach((b, i) => {
-        const t = parLigne.get(b.id);
-        if (!t) return;
-        poser(t, {
-          nature: "Remise CB",
-          statut,
-          texte: `Remise ${i + 1} sur ${g.remises!.length} créditées le ${fr(cle)} : ensemble ${formatEuros(g.banque!.montant)} pour ${formatEuros(g.caisse)} de CB au ticket Z (${journees}) — ${explication}.`,
-          cb: cle,
-          ...(g.joursCouverts?.[0] ? { lien: `/rapprochement?jour=${g.joursCouverts[0].date}` } : {}),
-        });
-      });
+      tous.push(g);
     }
     for (const b of p.remisesSeules) {
       const t = parLigne.get(b.id);
@@ -202,6 +169,72 @@ export function justifierReleve(d: DonneesReleve): ReleveJustifie {
         lien: `/rapprochement?jour=${addDays(b.date, -1)}`,
       });
     }
+  }
+  tous.sort((x, y) => x.banque!.date.localeCompare(y.banque!.date));
+  const ecartDe = (g: ComparaisonCB) => g.ecart ?? g.banque!.montant - g.caisse;
+  // Lot crédité un jour plus tard : un manque sur un crédit et un excédent sur le crédit voisin qui s'annulent
+  // (constaté sur les vraies données : 12-13/08, 31/08-01/09, 18-19/09).
+  const compense = new Map<string, string>();
+  for (let i = 0; i + 1 < tous.length; i++) {
+    const [x, y] = [ecartDe(tous[i]), ecartDe(tous[i + 1])];
+    if (Math.sign(x) === Math.sign(y) || Math.min(Math.abs(x), Math.abs(y)) <= TOLERANCE_ARRONDI) continue;
+    if (statutCB(tous[i], tous[i].banque!.date, finBanque, today) !== "anomalie" && statutCB(tous[i + 1], tous[i + 1].banque!.date, finBanque, today) !== "anomalie") continue;
+    if (Math.abs(x + y) <= Math.max(30000, 0.25 * Math.min(Math.abs(x), Math.abs(y)))) {
+      compense.set(tous[i].banque!.date, tous[i + 1].banque!.date);
+      compense.set(tous[i + 1].banque!.date, tous[i].banque!.date);
+      i++;
+    }
+  }
+  for (const g of tous) {
+    const cle = g.banque!.date;
+    const ecart = ecartDe(g);
+    groupesCB[cle] = {
+      credit: cle,
+      remises: g.remises!.length,
+      banque: g.banque!.montant,
+      caisse: g.caisse,
+      ecart,
+      ...(g.titres ? { titres: g.titres } : {}),
+      jours: (g.joursCouverts ?? []).map((j) => ({ date: j.date, montant: j.amount })),
+    };
+    let statut = statutCB(g, cle, finBanque, today);
+    const voisin = compense.get(cle);
+    const premierCredit = cle === debutBanque || (g.joursCouverts ?? []).some((j) => daysBetween(j.date, debutBanque) > 1);
+    let explication: string;
+    if (statut === "anomalie" && Math.abs(ecart) <= TOLERANCE_ARRONDI) {
+      statut = "justifie";
+      explication = `écart de ${formatEuros(ecart)} (arrondi)`;
+    } else if (statut === "anomalie" && voisin) {
+      statut = "justifie";
+      const autre = ecartDe(tous.find((x) => x.banque!.date === voisin)!);
+      explication = `écart de ${formatEuros(ecart)} compensé par le crédit du ${fr(voisin)} (${formatEuros(autre)}) : un lot de remises crédité un jour plus tard, reste ${formatEuros(ecart + autre)} sur les deux jours`;
+    } else if (statut === "anomalie" && premierCredit) {
+      statut = "explique";
+      explication = `premier crédit du relevé bancaire : les remises des journées précédentes ont été créditées avant le début du relevé (${fr(debutBanque)}), impossible de comparer`;
+    } else if (statut === "justifie") {
+      explication = g.titres
+        ? `écart de ${formatEuros(ecart)} = tickets-resto passés « CB » en caisse, payés à part par les émetteurs`
+        : g.voisin || g.remiseExacte
+          ? "un lot de remises est passé sur le crédit voisin, les deux écarts se compensent"
+          : Math.abs(ecart) <= 100
+            ? "à 1 € près"
+            : `écart de ${formatEuros(ecart)}`;
+    } else {
+      explication = statut === "attente" ? "le reste des remises peut encore arriver" : `écart de ${formatEuros(ecart)} non expliqué`;
+    }
+    const jours = (g.joursCouverts ?? []).map((j) => fr(j.date));
+    const journees = jours.length > 1 ? `journées du ${jours.join(", ")}` : `journée du ${jours[0] ?? "?"}`;
+    g.remises!.forEach((b, i) => {
+      const t = parLigne.get(b.id);
+      if (!t) return;
+      poser(t, {
+        nature: "Remise CB",
+        statut,
+        texte: `Remise ${i + 1} sur ${g.remises!.length} créditées le ${fr(cle)} : ensemble ${formatEuros(g.banque!.montant)} pour ${formatEuros(g.caisse)} de CB au ticket Z (${journees}) — ${explication}.`,
+        cb: cle,
+        ...(g.joursCouverts?.[0] ? { lien: `/rapprochement?jour=${g.joursCouverts[0].date}` } : {}),
+      });
+    });
   }
 
   // 2. Virements Uber Eats : le net annoncé par le récap Uber (mail du lundi) arrive tel quel, entre J-2 et J+5.
@@ -224,12 +257,14 @@ export function justifierReleve(d: DonneesReleve): ReleveJustifie {
       });
       continue;
     }
-    const s = semaineUber(addDays(t.date, -7));
+    // « VIR SEPA STICHTING CUSTODIAN UB POP SVCS, DOB , 20260803 - … » : la date est le lundi de la semaine payée.
+    const lu = /\b(20\d{2})(\d{2})(\d{2})\b/.exec(t.libelle ?? "");
+    const s = lu ? semaineUber(`${lu[1]}-${lu[2]}-${lu[3]}`) : semaineUber(addDays(t.date, -7));
     const z = d.cash.filter((c) => c.date >= s.debut && c.date <= s.fin).reduce((x, c) => x + (c.uber ?? 0), 0);
     poser(t, {
       nature: "Uber Eats",
       statut: "explique",
-      texte: `Virement Uber Eats, sans récap Uber enregistré pour le comparer au centime. Uber dans les tickets Z de la semaine du ${fr(s.debut)} au ${fr(s.fin)} : ${formatEuros(z)} (avant commission Uber).`,
+      texte: `Virement Uber Eats pour la semaine du ${fr(s.debut)} au ${fr(s.fin)}, sans récap Uber enregistré pour le comparer au centime. Uber dans les tickets Z de cette semaine : ${formatEuros(z)}${z > 0 ? `, soit ${Math.round((t.montant / z) * 100)} % versés après commission Uber` : ""}.`,
       lien: `/rapprochement?jour=${s.debut}`,
     });
   }
@@ -262,11 +297,24 @@ export function justifierReleve(d: DonneesReleve): ReleveJustifie {
         lien: `/rapprochement?jour=${m.days[0].date}`,
       });
     }
+    // Dépôts en montants ronds (« DPT VRAC ESP », 5 000 €) : contrôle en cumul, le déposé ne peut pas dépasser les
+    // espèces encaissées au ticket Z depuis le début du relevé.
+    const depuis = addDays(debutBanque, -21);
+    const tri = [...depots].sort((x, y) => x.date.localeCompare(y.date) || x.id.localeCompare(y.id));
+    let depose = 0;
+    const cumul = new Map<string, number>();
+    for (const b of tri) cumul.set(b.id, (depose += b.amount));
     for (const b of r.unmatchedDeposits) {
+      const caisse = especes.filter((c) => c.date >= depuis && c.date <= b.date).reduce((x, c) => x + c.amount, 0);
+      const deja = cumul.get(b.id)!;
+      const ok = caisse > 0 && deja <= caisse;
       poser(parLigne.get(b.id)!, {
         nature: "Dépôt d'espèces",
-        statut: "non_justifie",
-        texte: "Dépôt d'espèces : aucune suite de journées de caisse ne fait ce montant au centime.",
+        statut: ok ? "justifie" : caisse > 0 ? "anomalie" : "non_justifie",
+        texte: caisse
+          ? `Dépôt d'espèces. Du ${fr(depuis)} au ${fr(b.date)} : ${formatEuros(caisse)} d'espèces au ticket Z, ${formatEuros(deja)} déposés en banque (celui-ci compris)${ok ? ", le dépôt est couvert par la caisse" : " : plus d'espèces déposées que encaissées"}.`
+          : "Dépôt d'espèces : aucune journée de caisse avec des espèces avant ce dépôt.",
+        lien: `/rapprochement?jour=${b.date}`,
       });
     }
   }
@@ -274,7 +322,16 @@ export function justifierReleve(d: DonneesReleve): ReleveJustifie {
   // 5. Autres crédits : remboursement d'un fournisseur, sinon à justifier.
   for (const t of lignes.filter((x) => x.montant > 0 && !out.has(x.id))) {
     const deb = lireDebit({ ...t, montant: -t.montant });
+    const lib = normTexte(t.libelle ?? "");
+    if (/STRIPE|DISHOP/.test(lib)) {
+      poser(t, { nature: "Ventes en ligne", statut: "explique", texte: "Versement Stripe des commandes en ligne (site Dishop) : le détail est dans l'espace Dishop / Stripe." });
+      continue;
+    }
     const s = d.suppliers.find((x) => debitDuFournisseur(deb, x));
+    if (!s && /\b(INV|AVOIR|REMB|REMBOURSEMENT|RBT)\b/.test(lib)) {
+      poser(t, { nature: "Remboursement", statut: "explique", texte: `Remboursement ou avoir${deb.tiers ? ` de ${deb.tiers.replace(/ INV.*$/, "")}` : ""} (référence de facture dans le libellé).` });
+      continue;
+    }
     poser(t, {
       nature: "Crédit",
       statut: s ? "explique" : "non_justifie",
@@ -370,6 +427,10 @@ export function justifierReleve(d: DonneesReleve): ReleveJustifie {
         texte: `Même montant, au centime, qu'une facture ${f.supplierNom} du ${fr(f.dateFacture)} pas encore rattachée à un paiement.`,
         factures: facturesLiees([f.id], parFacture),
       });
+      continue;
+    }
+    if (/TOT DIF/.test(lib)) {
+      poser(t, { nature: "Carte bancaire", statut: "explique", texte: "Total du mois de la carte à débit différé : le détail des achats est sur le relevé de la carte (onglet carte de la banque)." });
       continue;
     }
     if (deb.tiers && hors.has(deb.tiers)) {
