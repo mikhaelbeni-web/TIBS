@@ -11,7 +11,7 @@ import { docMois, majReleveJustifie, type MoisReleve } from "@/lib/server/releve
 import { isRestaurantId } from "@/lib/restaurants";
 import { FieldValue } from "firebase-admin/firestore";
 import { rapprocher } from "@/lib/rapprochementFournisseurs";
-import { categorie, controleTotal, type LignePaiement } from "@/lib/ticketZ";
+import { categorie, controleTotal, tropPercuSuspect, type LignePaiement } from "@/lib/ticketZ";
 import type { BankTransaction, Invoice, Supplier, WithId } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -319,19 +319,26 @@ async function totalZ(cle: string | null) {
     const docs = await adminDb().collection(`restaurants/${r.id}/cashEntries`).where("source", "==", "ticketZ").get();
     const ecarts: unknown[] = [];
     const libelles: Record<string, number> = {};
+    const tropPercu: unknown[] = [];
     let zLus = 0;
+    let alertesTropPercu = 0;
     for (const d of docs.docs) {
       const paiements = d.get("paiements") as LignePaiement[] | undefined;
       const total = d.get("total") as number | undefined;
       if (!Array.isArray(paiements) || !paiements.length) continue;
       zLus++;
       for (const p of paiements) if (!["cb", "especes", "uber"].includes(categorie(p.libelle))) libelles[p.libelle] = (libelles[p.libelle] ?? 0) + 1;
+      const tp = tropPercuSuspect({ dateTicket: d.get("date"), paiements, total });
+      if (tp.montant > 0) {
+        tropPercu.push({ date: d.get("date"), montant: tp.montant, total: total ?? null, raisons: tp.raisons });
+        if (tp.raisons.length) alertesTropPercu++;
+      }
       if (total === undefined) continue;
       const c = controleTotal({ dateTicket: d.get("date"), paiements, total });
       if (c.statut === "ecart") ecarts.push({ date: d.get("date"), total, somme: c.somme, ecart: c.ecart, ttc: [d.get("ttc55"), d.get("ttc10"), d.get("ttc20")], lignes: paiements.map((p) => [p.libelle, p.montant, p.nombre ?? null]) });
     }
-    compteurs[r.id] = { zLus, ecarts: ecarts.length };
-    detail[r.id] = { ecarts, libelles };
+    compteurs[r.id] = { zLus, ecarts: ecarts.length, joursTropPercu: tropPercu.length, alertesTropPercu };
+    detail[r.id] = { ecarts, libelles, tropPercu };
   }
   return Response.json({ compteurs, ...(cle ? { chiffre: chiffrerPour(cle, detail) } : {}) });
 }
