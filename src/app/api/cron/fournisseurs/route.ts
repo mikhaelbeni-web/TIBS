@@ -7,6 +7,7 @@ import { getMessage, listMessageIds, refreshAccessToken } from "@/lib/server/goo
 import { syncMail } from "@/lib/server/mailSync";
 import { chercherDansBoites, passeReleves } from "@/lib/server/relevesPasse";
 import { validerAutomatiquement } from "@/lib/server/autoValider";
+import { docMois, majReleveJustifie, type MoisReleve } from "@/lib/server/releveJustifie";
 import { isRestaurantId } from "@/lib/restaurants";
 import { FieldValue } from "firebase-admin/firestore";
 import { rapprocher } from "@/lib/rapprochementFournisseurs";
@@ -33,6 +34,8 @@ const finMois = (m: string) => {
  * action=budget&r=19e&usd=100&modele=opus : fixe le budget de rattrapage (dépense déjà faite conservée).
  * action=pointer&r=19e : marque payées les factures retrouvées au centime sur le relevé (même calcul que l'onglet
  * « Banque depuis janvier »). Compteurs seulement en clair.
+ * action=releve[&cle=…] : recalcule le relevé de compte justifié ligne par ligne (deux restaurants) ; en clair, le
+ * nombre de lignes par statut et par nature ; chiffré, les lignes non justifiées / à regarder (libellé, montant, texte).
  */
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -46,6 +49,7 @@ export async function GET(request: Request) {
     if (action === "pointer") return await pointer(q);
     if (action === "releves") return await mesurerReleves(q.get("cle"));
     if (action === "calibrage") return await calibrer(q.get("cle"));
+    if (action === "releve") return await releveCompte(q.get("cle"));
     if (action === "releves-passe") {
       const res: Record<string, unknown> = {};
       for (const r of RESTAURANTS) res[r.id] = await passeReleves(r.id, { budgetMs: 130_000, force: true, maxLectures: 25 }).catch((e) => ({ erreur: (e as Error).message.slice(0, 200) }));
@@ -274,4 +278,32 @@ async function calibrer(cle: string | null) {
     detail[r.id] = res;
   }
   return Response.json({ total, trouvees, ...(cle ? { chiffre: chiffrerPour(cle, detail) } : {}) });
+}
+
+/** Relevé de compte justifié : recalcul pour les deux restaurants, compteurs en clair, lignes à revoir chiffrées. */
+async function releveCompte(cle: string | null) {
+  const compteurs: Record<string, unknown> = {};
+  const detail: Record<string, unknown> = {};
+  for (const r of RESTAURANTS) {
+    const debut = Date.now();
+    const index = await majReleveJustifie(r.id);
+    const ms = Date.now() - debut;
+    const docs = index.mois.length ? await adminDb().getAll(...index.mois.map((m) => adminDb().doc(`restaurants/${r.id}/settings/${docMois(m.mois)}`))) : [];
+    const mois = docs.map((d) => d.data() as MoisReleve);
+    const parNature: Record<string, Record<string, number>> = {};
+    for (const m of mois) for (const l of m.lignes) (parNature[l.nature] ??= {})[l.statut] = (parNature[l.nature]?.[l.statut] ?? 0) + 1;
+    compteurs[r.id] = {
+      ms,
+      debut: index.debut,
+      fin: index.fin,
+      mois: index.mois.map((m) => ({ mois: m.mois, lignes: m.lignes, ...m.statuts })),
+      parNature,
+      tailleMaxKo: Math.max(0, ...mois.map((m) => Math.round(JSON.stringify(m).length / 1024))),
+    };
+    if (cle)
+      detail[r.id] = mois.flatMap((m) =>
+        m.lignes.filter((l) => l.statut !== "justifie").map((l) => ({ d: l.date, l: l.libelle, m: l.montant, n: l.nature, s: l.statut, t: l.texte })),
+      );
+  }
+  return Response.json({ compteurs, ...(cle ? { chiffre: chiffrerPour(cle, detail) } : {}) });
 }

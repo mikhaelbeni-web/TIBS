@@ -58,6 +58,11 @@ export default function Dashboard() {
   }, [invoices.items]);
   const monthCash = cash.items.filter((c) => c.date.startsWith(mois));
   const incoherences = useIncoherences();
+  // Relevé de compte justifié : un seul document (résumé par mois), écrit par le serveur.
+  const [releve, setReleve] = useState<{ mois: { mois: string; lignes: number; statuts: Record<string, number> }[] } | null>(null);
+  useEffect(() => onSnapshot(doc(db(), "restaurants", rid, "settings", "releve"), (s) => setReleve((s.data() as typeof releve) ?? null), () => {}), [rid]);
+  const releveMois = releve?.mois.at(-1);
+  const releveAVoir = releveMois ? (releveMois.statuts.non_justifie ?? 0) + (releveMois.statuts.anomalie ?? 0) : 0;
 
   const tiles = [
     {
@@ -86,6 +91,15 @@ export default function Dashboard() {
             : "Relevés fournisseurs à jour"
         : "Contrôle des relevés pas encore fait",
       alert: (settings.facturesManquantes?.aReclamer ?? 0) > 0,
+    },
+    {
+      href: "/releve",
+      title: "Relevé de compte",
+      value: releveMois ? String(releveAVoir) : "—",
+      sub: releveMois
+        ? `ligne(s) sans justificatif en ${new Date(`${releveMois.mois}-01T00:00:00Z`).toLocaleDateString("fr-FR", { month: "long", timeZone: "UTC" })} · ${releveMois.lignes} opérations`
+        : "Chaque opération bancaire justifiée",
+      alert: releveAVoir > 0,
     },
     { href: "/factures", title: "Factures à payer", value: formatEuros(due.total), sub: `${due.count} facture(s)`, alert: false },
     {

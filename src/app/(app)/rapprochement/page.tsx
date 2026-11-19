@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { deleteDoc, doc, getDoc, setDoc, writeBatch } from "firebase/firestore";
 import { Suspense, useMemo, useRef, useState, type FormEvent } from "react";
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Sheet } from "@/components/ui";
@@ -329,6 +330,10 @@ export default function RapprochementPage() {
       <input ref={uberFile} type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => importUber(e.target.files?.[0])} />
 
       <BanqueCard />
+      <Link href="/releve" className="mb-4 flex min-h-12 items-center justify-between gap-2 rounded-card border border-border bg-surface px-4 text-sm font-medium hover:border-ink">
+        <span>Relevé de compte : chaque ligne avec sa justification</span>
+        <span aria-hidden>→</span>
+      </Link>
 
       <div className="mb-4 grid grid-cols-2 items-end gap-2 sm:max-w-xl sm:grid-cols-3">
         <div className="col-span-2 sm:col-span-1">
