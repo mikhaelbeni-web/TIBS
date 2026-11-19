@@ -18,6 +18,7 @@ const ETIQUETTES: Record<TypeIncoherence, string> = {
   cb_sans_remise: "CB",
   remise_sans_caisse: "CB",
   total_z: "Ticket Z",
+  trop_percu: "Ticket Z",
   uber_jour: "Uber",
   uber_semaine: "Uber",
   uber_banque: "Uber",

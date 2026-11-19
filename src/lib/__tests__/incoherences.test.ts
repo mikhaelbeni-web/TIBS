@@ -92,6 +92,24 @@ describe("incohérences de l'accueil", () => {
     expect(b.liste.map((x) => [x.type, x.jour, x.ecart])).toEqual([["total_z", "2026-11-11", -5000]]);
   });
 
+  it("trop perçu : 44 € sur 6 958,70 € passe, 60 € ou 2 % alertent", () => {
+    const z = (tp: number, total: number, nombre?: number) => ({
+      paiements: [
+        { libelle: "CB", montant: total, categorie: "cb" },
+        { libelle: "trop perçu", montant: tp, categorie: "autres", ...(nombre ? { nombre } : {}) },
+      ],
+      total,
+    });
+    const cash = [
+      jour("2026-11-10", 695870, z(4400, 695870)),
+      jour("2026-11-11", 600000, z(6000, 600000)),
+      jour("2026-11-12", 200000, z(4500, 200000)),
+      jour("2026-11-13", 600000, z(4400, 600000, 2)),
+    ];
+    const b = base(cash, []);
+    expect(b.liste.filter((x) => x.type === "trop_percu").map((x) => x.jour).sort()).toEqual(["2026-11-11", "2026-11-12", "2026-11-13"]);
+  });
+
   it("Uber du jour : commandes ou montant différents du Manager", () => {
     const cash = [
       jour("2026-11-10", 0, { uber: 90100, uberCommandes: 25 }),

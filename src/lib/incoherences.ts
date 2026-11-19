@@ -6,6 +6,7 @@ import {
   comparerUberBanque,
   comparerUberJour,
   controleTotal,
+  tropPercuSuspect,
   estVirementTitres,
   pointageMoisCB,
   type ComparaisonCB,
@@ -20,7 +21,7 @@ import {
  * créditées en plusieurs fois, ticket Z du jour pas encore relevé) reste « en attente » au lieu de sonner l'alerte.
  */
 
-export type TypeIncoherence = "cb" | "cb_sans_remise" | "remise_sans_caisse" | "total_z" | "uber_jour" | "uber_semaine" | "uber_banque" | "titres";
+export type TypeIncoherence = "cb" | "cb_sans_remise" | "remise_sans_caisse" | "total_z" | "trop_percu" | "uber_jour" | "uber_semaine" | "uber_banque" | "titres";
 
 export interface Incoherence {
   cle: string;
@@ -215,6 +216,29 @@ export function listerIncoherences(d: DonneesIncoherences): BilanIncoherences {
         ecart: r.ecart,
       });
     }
+  }
+
+  // --- Trop perçu suspect : au-delà de ce qu'un titre-restaurant sans rendu de monnaie explique (SEUILS_TROP_PERCU).
+  // Pas de règle « journée sans titre-restaurant » : les titres sont saisis en CB dans L'Addition, le Z n'en montre jamais.
+  for (const c of d.cash) {
+    if (!dansFenetre(c.date) || !c.paiements?.length) continue;
+    const t: TicketZ = {
+      dateTicket: c.ticketZ?.dateTicket ?? c.date,
+      paiements: c.paiements.map((p) => ({ ...p, categorie: p.categorie as TicketZ["paiements"][number]["categorie"] })),
+      total: c.total,
+    };
+    const r = tropPercuSuspect(t);
+    if (!r.raisons.length) continue;
+    liste.push({
+      cle: `trop_percu:${c.date}`,
+      type: "trop_percu",
+      date: c.date,
+      jour: c.date,
+      titre: `Trop perçu de ${formatEuros(r.montant)} à vérifier`,
+      detail: `Journée du ${fr(c.date)} : ${r.raisons.join(", ")}. Un trop perçu normal vient d'un titre-restaurant plus élevé que la note (quelques euros). Vérifie qu'il ne cache pas un écart de caisse.`,
+      ecart: r.montant,
+      ...(c.total ? { part: Math.round((r.montant / c.total) * 1000) / 1000 } : {}),
+    });
   }
 
   // --- Uber du jour : même nombre de commandes et même montant que le Manager Uber Eats.

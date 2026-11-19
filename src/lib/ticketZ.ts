@@ -1,4 +1,4 @@
-import { daysBetween } from "./money";
+import { daysBetween, formatEuros } from "./money";
 import { reconcile, type BankLine, type CashLine } from "./reconcile";
 
 /**
@@ -609,6 +609,34 @@ export function controleTotal(t: TicketZ): ControleTotal {
   if (Math.abs(ecart) <= 1) return { statut: "ok", somme, total: t.total, ecart, horsTotal };
   const egales = paiements.filter((p) => p.categorie !== "tropPercu" && p.montant !== 0 && Math.abs(p.montant - ecart) <= 1);
   return { statut: "ecart", somme, total: t.total, ecart, horsTotal, ...(egales.length === 1 ? { ligneEnTrop: egales[0] } : {}) };
+}
+
+/**
+ * Seuils d'alerte « trop perçu » (centimes, part du CA). Un trop perçu normal vient d'un titre-restaurant plus élevé
+ * que la note (pas de rendu de monnaie) : quelques euros par titre, 25 € au plus. À ajuster sur l'historique réel.
+ */
+export const SEUILS_TROP_PERCU = {
+  /** Moyenne par encaissement, quand le Z imprime le nombre (« ×N ») : au-dessus, plus qu'un titre ne peut laisser. */
+  parEncaissement: 2000,
+  /** Total de la journée. */
+  parJour: 5000,
+  /** Total de la journée rapporté au CA (total imprimé). */
+  partDuCA: 0.01,
+};
+
+/** Raisons pour lesquelles le trop perçu d'une journée mérite un coup d'œil (vide = rien d'anormal). */
+export function tropPercuSuspect(t: TicketZ, seuils = SEUILS_TROP_PERCU): { montant: number; raisons: string[] } {
+  const lignes = t.paiements.filter((p) => categorie(p.libelle) === "tropPercu");
+  const montant = lignes.reduce((x, p) => x + p.montant, 0);
+  const raisons: string[] = [];
+  if (montant <= 0) return { montant, raisons };
+  for (const p of lignes) {
+    if (p.nombre && p.montant / p.nombre > seuils.parEncaissement) raisons.push(`en moyenne plus de ${formatEuros(seuils.parEncaissement)} par encaissement (${p.nombre} encaissements)`);
+  }
+  if (montant > seuils.parJour) raisons.push(`plus de ${formatEuros(seuils.parJour)} sur la journée`);
+  const ca = t.total ?? totaux(t.paiements.map((p) => ({ ...p, categorie: categorie(p.libelle) }))).somme;
+  if (ca > 0 && montant > ca * seuils.partDuCA) raisons.push(`plus de ${Math.round(seuils.partDuCA * 1000) / 10} % du CA du jour`);
+  return { montant, raisons };
 }
 
 /** Ventes Uber Eats d'une journée, d'après le Manager Uber Eats (uberJours/{AAAA-MM-JJ}). */
