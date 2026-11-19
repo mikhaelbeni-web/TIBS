@@ -4,6 +4,7 @@
 # - rattrapage : relit les mails des mois donnés, lot par lot, sur le budget IA de rattrapage.
 # - budget : fixe ce budget (usd, modele) pour le restaurant.
 # - pointer : marque payées les factures retrouvées au centime sur le relevé bancaire.
+# - total-z : tickets Z dont le total imprimé ≠ somme des paiements (détail chiffré avec « cle »).
 # - releve : recalcule le relevé de compte justifié ligne par ligne (compteurs ; lignes à revoir chiffrées avec « cle »).
 name: Factures fournisseurs depuis janvier (manuel)
 
@@ -24,6 +25,7 @@ on:
           - releves-passe
           - calibrage
           - releve
+          - total-z
           - nettoyer
       restaurant:
         description: "19e, 17e ou les deux (rattrapage, budget)"
@@ -49,7 +51,7 @@ permissions:
 
 jobs:
   fournisseurs:
-    if: inputs.action == 'mesure' || inputs.action == 'releves' || inputs.action == 'releves-passe' || inputs.action == 'calibrage' || inputs.action == 'releve'
+    if: inputs.action == 'mesure' || inputs.action == 'releves' || inputs.action == 'releves-passe' || inputs.action == 'calibrage' || inputs.action == 'releve' || inputs.action == 'total-z'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
