@@ -103,3 +103,47 @@ describe("justifierReleve", () => {
     expect(JSON.stringify(x).length).toBeLessThan(900_000);
   });
 });
+
+describe("cas constatés sur le relevé réel (montants fictifs)", () => {
+  it("lot crédité un jour plus tard : manque et excédent voisins se compensent", () => {
+    const x = justifierReleve({
+      today: "2026-08-30",
+      bank: [
+        tx("a", "2026-08-11", 50000, "CB TIB S 100826 CONTRAT 8060564 REM 123456"),
+        tx("b", "2026-08-12", 70000, "CB TIB S 110826 CONTRAT 8060564 REM 123457"),
+        tx("c", "2026-08-13", 90000, "CB TIB S 120826 CONTRAT 8060564 REM 123458"),
+      ],
+      invoices: [], suppliers: [], versementsUber: [],
+      cash: [
+        { id: "1", date: "2026-08-10", cb: 50000 },
+        { id: "2", date: "2026-08-11", cb: 170000 },
+        { id: "3", date: "2026-08-12", cb: 0 },
+      ].map((c, i) => (i === 2 ? { ...c, cb: 1 } : c)),
+    });
+    // 12/08 : -1 000 €, 13/08 : +900 € (lot de la veille) → compensés.
+    const b = x.lignes.find((l) => l.id === "b")!;
+    expect(b.statut).toBe("justifie");
+    expect(b.texte).toContain("compensé");
+  });
+
+  it("dépôts d'espèces ronds couverts en cumul, Stripe, carte à débit différé, semaine Uber du libellé", () => {
+    const x = justifierReleve({
+      today: "2026-08-30",
+      bank: [
+        tx("d", "2026-08-12", 500000, "DPT VRAC ESP 0003529060 120826 N 0003529060"),
+        tx("s", "2026-08-10", 22772, "VIR SEPA STRIPE DISHOP"),
+        tx("k", "2026-08-04", -630797, "CB 4739******202103 TOT DIF JUIL"),
+        tx("u", "2026-08-10", 317760, "VIR SEPA STICHTING CUSTODIAN UB POP SVCS, DOB , 20260803 - 2"),
+        tx("m", "2026-08-13", 15800, "VIR SEPA METRO FRANCE /INV/0170-0053-072138 11.8.2026"),
+      ],
+      invoices: [], suppliers: [], versementsUber: [],
+      cash: Array.from({ length: 10 }, (_, i) => ({ id: `j${i}`, date: `2026-08-0${i}`.replace("-0010", "-10"), cb: 0, especes: 60000, uber: 50000 })).slice(1),
+    });
+    const l = (id: string) => x.lignes.find((y) => y.id === id)!;
+    expect(l("d").statut).toBe("justifie");
+    expect(l("s").nature).toBe("Ventes en ligne");
+    expect(l("k").nature).toBe("Carte bancaire");
+    expect(l("u").texte).toContain("semaine du 03/08/2026 au 09/08/2026");
+    expect(l("m").nature).toBe("Remboursement");
+  });
+});
